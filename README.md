@@ -1,0 +1,113 @@
+A utility to measure/track network microbursts. 
+
+[Microbursts](https://www.qacafe.com/resources/what-is-a-microburst-and-how-to-detect-them/) can trigger various kinds of issues, especially in cloud environments like in [AWS](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/monitoring-network-performance-ena.html)
+
+This utility measures the microbursts efficiently using eBPF (i.e., no packet captures) and generates console or chart output:
+
+Console output:
+
+```
+$ sudo ./network-microburst -burst-window 1ms
+...
+19:21:29.470: rx: 13 MB      tx: 13 MB
+19:21:29.471: rx: 12 MB      tx: 12 MB
+19:21:29.472: rx: 12 MB      tx: 12 MB
+19:21:29.473: rx: 12 MB      tx: 12 MB
+19:21:29.475: rx: 12 MB      tx: 12 MB
+19:21:29.476: rx: 11 MB      tx: 11 MB
+19:21:29.477: rx: 13 MB      tx: 13 MB
+19:21:29.478: rx: 12 MB      tx: 12 MB
+19:21:29.479: rx: 12 MB      tx: 12 MB
+19:21:29.480: rx: 2.4 MB     tx: 2.4 MB
+19:21:30.464: rx: 394 kB     tx: 394 kB
+19:21:30.465: rx: 2.1 MB     tx: 2.1 MB
+19:21:30.466: rx: 2.5 MB     tx: 2.5 MB
+19:21:30.468: rx: 2.6 MB     tx: 2.6 MB
+19:21:30.469: rx: 3.2 MB     tx: 3.2 MB
+19:21:30.470: rx: 9.9 MB     tx: 9.9 MB
+19:21:30.471: rx: 12 MB      tx: 12 MB
+19:21:30.472: rx: 13 MB      tx: 13 MB
+19:21:30.473: rx: 14 MB      tx: 14 MB
+19:21:30.475: rx: 13 MB      tx: 13 MB
+19:21:30.476: rx: 13 MB      tx: 12 MB
+19:21:30.477: rx: 13 MB      tx: 13 MB
+19:21:30.478: rx: 13 MB      tx: 13 MB
+19:21:30.479: rx: 12 MB      tx: 13 MB
+...
+```
+
+Charts:
+
+Bursty traffic:
+![graphs/bursty.html](graphs/bursty.gif)
+
+Smooth traffic:
+![graphs/smooth.html](graphs/smooth.gif)
+
+## Installation
+
+This requires libbpf package. This should be installed using distro's package manager (`pacman -S libbpf` etc).
+
+```
+git clone git@github.com:surki/network-microburst.git
+cd network-microburst
+make
+```
+
+## Usage
+
+> **_NOTE:_** To simulate network microbursts, we can use iperf3:
+>
+> 
+> On the server side:  
+> ```  iperf3 -s ```
+>
+> On client side (which can be in same machine for trying out this tool)  
+>   To trigger microburst (this sends 1GB on each second starting):  
+> ```     iperf3 -c 127.0.0.1 -b 1G --pacing-timer 1000000 -t 10```
+>
+>   To smoothly send traffic (this sends 1GB, splits and sends data every 100us):  
+> ```     iperf3 -c 127.0.0.1 -b 1G --pacing-timer 100 -t 10```
+>
+
+To track network transfers (tx/rx) at 1ms interval and print them on screen:
+
+```
+sudo ./network-microburst -burst-window 1ms
+```
+
+To track network transfers at 1ms interval, but only include measurements above 5000 bytes:
+
+```
+sudo ./network-microburst -burst-window 1ms \
+   -rx-threshold 5000 -tx-threshold 5000
+```
+
+To track network transfers at 1ms interval, with 5000 bytes threshold, generate/save chart to disk:
+
+```
+sudo ./network-microburst -burst-window 1ms \
+   -rx-threshold 5000 -tx-threshold 5000 \
+   -save-graph /tmp/graph.html
+```
+
+To track network transfers at 1ms interval, but only certain interfaces:
+
+```
+sudo ./network-microburst -burst-window 1ms \
+   -filter-interface eth0
+```
+
+To track only network rx:
+
+```
+sudo ./network-microburst -burst-window 1ms \
+   -track-tx=false
+```
+
+To print a histogram at the end:
+
+```
+sudo ./network-microburst -burst-window 1ms \
+   -print-histogram
+```
