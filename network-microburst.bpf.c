@@ -31,10 +31,10 @@ const volatile union name_buf ifname;
     params:
         skb: pointer to the sk_buff
     returns:
-        1: if filter is not set or device name matches the filter
-        0: if filter is set and device name does not match the filter
+        1: allow processing
+        0: discard
 */
-static inline int name_filter(struct sk_buff* skb)
+static inline int allow_packet(struct sk_buff* skb)
 {
     if (filter_dev != 1) {
         return 1;
@@ -56,7 +56,7 @@ static inline int name_filter(struct sk_buff* skb)
 SEC("tp_btf/netif_receive_skb")
 int BPF_PROG(trace_network_receive, struct sk_buff *skb)
 {
-    if(!name_filter(skb)){
+    if(!allow_packet(skb)){
         return 0;
     }
 
@@ -75,7 +75,7 @@ int BPF_PROG(trace_network_receive, struct sk_buff *skb)
 SEC("tp_btf/net_dev_start_xmit")
 int BPF_PROG(trace_network_transmit, struct sk_buff *skb)
 {
-    if(!name_filter(skb)){
+    if(!allow_packet(skb)){
         return 0;
     }
 
