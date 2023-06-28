@@ -26,11 +26,18 @@ union name_buf {
 
 const volatile u8 filter_dev = 0;
 const volatile union name_buf ifname;
-
-static inline int name_filter(struct sk_buff* skb)
+/*
+    checks if device name matches the filter
+    params:
+        skb: pointer to the sk_buff
+    returns:
+        1: allow processing
+        0: discard
+*/
+static inline int allow_packet(struct sk_buff* skb)
 {
     if (filter_dev != 1) {
-        return 0;
+        return 1;
     }
 
     union name_buf real_devname;
@@ -49,7 +56,7 @@ static inline int name_filter(struct sk_buff* skb)
 SEC("tp_btf/netif_receive_skb")
 int BPF_PROG(trace_network_receive, struct sk_buff *skb)
 {
-    if(!name_filter(skb)){
+    if(!allow_packet(skb)){
         return 0;
     }
 
@@ -68,7 +75,7 @@ int BPF_PROG(trace_network_receive, struct sk_buff *skb)
 SEC("tp_btf/net_dev_start_xmit")
 int BPF_PROG(trace_network_transmit, struct sk_buff *skb)
 {
-    if(!name_filter(skb)){
+    if(!allow_packet(skb)){
         return 0;
     }
 
