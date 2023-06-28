@@ -1,2 +1,4 @@
 /network-microburst
 /network-microburst.bpf.o
+/release/
+/build/

@@ -2,6 +2,7 @@ package main
 
 import (
 	"C"
+	_ "embed"
 	"encoding/binary"
 	"flag"
 	"fmt"
@@ -30,6 +31,11 @@ var (
 	trackRx         bool
 	trackTx         bool
 )
+
+//go:embed network-microburst.bpf.o
+var bpfBin []byte
+
+const bpfName = "network-microburst.bpf.o"
 
 func init() {
 	flag.BoolVar(&debug, "debug", false, "enable debug logs")
@@ -63,7 +69,7 @@ func main() {
 		},
 	})
 
-	module, err := bpf.NewModuleFromFile("network-microburst.bpf.o")
+	module, err := bpf.NewModuleFromBuffer(bpfBin, bpfName)
 	if err != nil {
 		panic(err)
 	}

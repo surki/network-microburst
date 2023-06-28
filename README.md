@@ -1,8 +1,8 @@
 A utility to measure/track network microbursts. 
 
-[Microbursts](https://www.qacafe.com/resources/what-is-a-microburst-and-how-to-detect-them/) can trigger various kinds of issues, especially in cloud environments like in [AWS](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/monitoring-network-performance-ena.html)
+[Microbursts](https://www.qacafe.com/resources/what-is-a-microburst-and-how-to-detect-them/) can trigger various kinds of issues, especially in cloud environments like in [AWS](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/monitoring-network-performance-ena.html) where a given guranteed baseline bandwidth per second may not be allowed to be bursty (like can't send all data in few milliseconds, it will have to be sent by spreading over entire 1000ms etc)
 
-This utility measures the microbursts efficiently using eBPF (i.e., no packet captures) and generates console or chart output:
+This utility measures the microbursts efficiently using eBPF (i.e., no packet captures) using given aggregation window and generates console or chart output:
 
 Console output:
 
@@ -46,13 +46,25 @@ Smooth traffic:
 
 ## Installation
 
-This requires libbpf package. This should be installed using distro's package manager (`pacman -S libbpf` etc).
+You can download from the [Release](https://github.com/surki/network-microburst/releases/latest)
 
-```
-git clone git@github.com:surki/network-microburst.git
-cd network-microburst
-make
-```
+Alternatively, to compile from source, there are two options:
+
+1. Building on the host.
+    1. Install prerequisites: `clang`, `gcc`, `go`, static version of `libelf`
+    2. Build
+       ```
+       make
+       ```
+
+2. Building using docker (no dependencies required on the host, other than docker)
+
+   ```
+   make release
+   ```
+
+   This will produce two static binaries under `release` directory: `network-microburst-arm64` and `network-microburst-x86_64`
+
 
 ## Usage
 
