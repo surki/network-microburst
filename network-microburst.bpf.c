@@ -26,11 +26,18 @@ union name_buf {
 
 const volatile u8 filter_dev = 0;
 const volatile union name_buf ifname;
-
+/*
+    checks if device name matches the filter
+    params:
+        skb: pointer to the sk_buff
+    returns:
+        1: if filter is not set or device name matches the filter
+        0: if filter is set and device name does not match the filter
+*/
 static inline int name_filter(struct sk_buff* skb)
 {
     if (filter_dev != 1) {
-        return 0;
+        return 1;
     }
 
     union name_buf real_devname;
