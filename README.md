@@ -46,13 +46,25 @@ Smooth traffic:
 
 ## Installation
 
-This requires libbpf package. This should be installed using distro's package manager (`pacman -S libbpf` etc).
+You can download from the [Release](https://github.com/surki/network-microburst/releases/latest)
 
+Alternatively, to compile from source, there are two options:
+
+1. Building on the host.
+    1. Install prerequisites: `clang`, `gcc` and `go`
+    2. Build
 ```
-git clone git@github.com:surki/network-microburst.git
-cd network-microburst
 make
 ```
+
+2. Building using docker (no dependencies required on the host, other than docker)
+
+```
+make release
+```
+
+This will produce two static binaries under `release` directory: `network-microburst-arm64` and `network-microburst-x86_64`
+
 
 ## Usage
 
