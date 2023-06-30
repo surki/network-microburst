@@ -17,6 +17,7 @@ network-microburst.bpf.o: network-microburst.bpf.c build/libbpf/libbpf.a
 	$(CLANG) -mcpu=v3 -g -O2 -Wall -Werror -D__TARGET_ARCH_$(ARCH) -I$(PWD)/build/libbpf $(CFLAGS) -I./include/$(ARCH) -c -target bpf $< -o $@
 
 libbpf: build/libbpf/libbpf.a
+
 build/libbpf/libbpf.a:
 	@echo "building $@"
 	@if [ ! -d libbpf/src ]; then git submodule update --init; fi # --init --recursive
@@ -39,8 +40,7 @@ release:
 	docker build -t network-microburst .
 	mkdir -p release
 	DOCKER_ID=$$(docker create network-microburst) && \
-		docker cp $${DOCKER_ID}:/src/network-microburst/network-microburst-arm64 ./release/ && \
-		docker cp $${DOCKER_ID}:/src/network-microburst/network-microburst-x86_64 ./release/
+		docker cp $${DOCKER_ID}:/src/network-microburst/release .
 
 .PHONY: clean
 clean:
