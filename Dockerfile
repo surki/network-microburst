@@ -14,13 +14,12 @@ COPY ./ /src/network-microburst
 # Build x86_64
 RUN cd /src/network-microburst && \
     make clean && \
-    make network-microburst GOOS=linux GOARCH=amd64 CC=x86_64-linux-gnu-gcc-12 CLANG=clang-15 && \
+    make network-microburst GOOS=linux GOARCH=amd64 CC=x86_64-linux-gnu-gcc CLANG=clang-15 && \
     cp network-microburst release/network-microburst-x86_64
 
 # Build arm64
 RUN cd /src/network-microburst && \
     make clean && \
-    make network-microburst GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc-12 CLANG=clang-15 && \
+    make network-microburst GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc CLANG=clang-15 && \
     cp network-microburst release/network-microburst-arm64 && \
     make clean
-
