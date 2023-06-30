@@ -51,7 +51,7 @@ You can download from the [Release](https://github.com/surki/network-microburst/
 Alternatively, to compile from source, there are two options:
 
 1. Building on the host.
-    1. Install prerequisites: `clang`, `gcc` and `go`
+    1. Install prerequisites: `clang`, `gcc`, `go`, static version of `libelf`
     2. Build
 ```
 make

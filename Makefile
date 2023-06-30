@@ -19,7 +19,7 @@ network-microburst.bpf.o: network-microburst.bpf.c build/libbpf/libbpf.a
 libbpf: build/libbpf/libbpf.a
 build/libbpf/libbpf.a:
 	@echo "building $@"
-	@if [ ! -d libbpf/src ]; then git submodule update; fi # --init --recursive
+	@if [ ! -d libbpf/src ]; then git submodule update --init; fi # --init --recursive
 	@CFLAGS="-fPIC" \
 	LD_FLAGS="" \
 		make -C libbpf/src \
