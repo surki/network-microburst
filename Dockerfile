@@ -11,15 +11,16 @@ RUN dpkg --add-architecture arm64 && \
 
 COPY ./ /src/network-microburst
 
+WORKDIR /src/network-microburst/
+
+RUN rm -rf release && mkdir -p release
+
 # Build x86_64
-RUN cd /src/network-microburst && \
-    make clean && \
+RUN make clean && \
     make network-microburst GOOS=linux GOARCH=amd64 CC=x86_64-linux-gnu-gcc CLANG=clang-15 && \
     cp network-microburst release/network-microburst-x86_64
 
 # Build arm64
-RUN cd /src/network-microburst && \
-    make clean && \
+RUN make clean && \
     make network-microburst GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc CLANG=clang-15 && \
-    cp network-microburst release/network-microburst-arm64 && \
-    make clean
+    cp network-microburst release/network-microburst-arm64
