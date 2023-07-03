@@ -1,0 +1,45 @@
+name: Publish
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: read
+  repository-projects: read
+  statuses: read
+jobs:
+  release-build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
+    - name: Get tag
+      id: get_tag
+      run: |
+        tag="${GITHUB_REF#refs/*/}"
+        pure_version=${tag#"v"}
+        version="v${pure_version}"
+        date=$(git show -s --format=%ci ${GITHUB_REF} | sed -e "s/ /::/g")
+
+        echo "TAG=${tag}" >> $GITHUB_OUTPUT
+        echo "VERSION=${version}" >> $GITHUB_OUTPUT
+    - name: Build
+      id: build
+      run: |
+        make build
+    - name: Upload assets
+      id: upload-assets
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        version="${{ steps.get_tag.outputs.VERSION }}"
+        arm64_version="network-microburst-${version}-arm64"
+        x86_64_version="network-microburst-${version}-x86_64"
+        mv release/network-microburst-arm64 ${arm64_version}
+        mv release/network-microburst-x86_64 ${x86_64_version}
+        gh release upload  $version ${arm64_version}
+        gh release upload  $version ${x86_64_version}
