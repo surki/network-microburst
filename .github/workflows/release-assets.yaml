@@ -30,7 +30,7 @@ jobs:
     - name: Build
       id: build
       run: |
-        make build
+        make release
     - name: Upload assets
       id: upload-assets
       env:
