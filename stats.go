@@ -26,7 +26,7 @@ func statsInit() {
 		rxHist = hdrhistogram.New(1, int64(10000000000), 3)
 		txHist = hdrhistogram.New(1, int64(10000000000), 3)
 	}
-	if saveGraphPath != "" {
+	if saveGraphHtmlPath != "" {
 		rxData = ring.New(10000)
 		txData = ring.New(10000)
 	}
@@ -41,7 +41,7 @@ func statsFinish() {
 		fmt.Println(getHistogram(txHist))
 	}
 
-	if saveGraphPath != "" {
+	if saveGraphHtmlPath != "" {
 		saveGraph()
 	}
 }
@@ -80,12 +80,12 @@ func saveGraph() {
 		getRxScatter(),
 		getTxScatter(),
 	)
-	f, err := os.Create(saveGraphPath)
+	f, err := os.Create(saveGraphHtmlPath)
 	if err != nil {
 		panic(err)
 	}
 	page.Render(io.MultiWriter(f))
-	log.Printf("saved graph at %s\n", saveGraphPath)
+	log.Printf("saved graph at %s\n", saveGraphHtmlPath)
 }
 
 func getRxScatter() *charts.Scatter {
