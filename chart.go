@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"sync"
 	"time"
 
 	"github.com/dustin/go-humanize"
@@ -9,7 +11,7 @@ import (
 	"github.com/mum4k/termdash/container"
 	"github.com/mum4k/termdash/container/grid"
 	"github.com/mum4k/termdash/linestyle"
-	"github.com/mum4k/termdash/terminal/termbox"
+	"github.com/mum4k/termdash/terminal/tcell"
 	"github.com/mum4k/termdash/terminal/terminalapi"
 	"github.com/mum4k/termdash/widgets/linechart"
 	"github.com/mum4k/termdash/widgets/text"
@@ -19,18 +21,21 @@ const TUI_GRAPH_MAX_POINTS = 20000
 const REDRAW_INTERVAL = 250 * time.Millisecond
 
 type chart struct {
-	t               *termbox.Terminal
+	t               terminalapi.Terminal
+	controller      *termdash.Controller
 	container       *container.Container
-	graphDataRx     []float64
-	graphDataRxTime []string
-	graphDataTx     []float64
-	graphDataTxTime []string
+	rxLock          sync.Mutex
+	graphDataRx     *ringBuffer[float64]
+	graphDataRxTime *ringBuffer[time.Time]
+	txLock          sync.Mutex
+	graphDataTx     *ringBuffer[float64]
+	graphDataTxTime *ringBuffer[time.Time]
 	lcRx            *linechart.LineChart
 	lcTx            *linechart.LineChart
 }
 
 func newChart(showRx, showTx bool) (*chart, error) {
-	t, err := termbox.New()
+	t, err := tcell.New()
 	if err != nil {
 		return nil, err
 	}
@@ -54,27 +59,19 @@ func newChart(showRx, showTx bool) (*chart, error) {
 			return nil, err
 		}
 
-		rxLegend, err := text.New(text.RollContent(), text.WrapAtWords())
-		if err != nil {
-			return nil, err
-		}
-		if err := rxLegend.Write("rx"); err != nil {
-			return nil, err
-		}
-
 		builder.Add(
 			grid.RowHeightPerc(
 				50,
 				grid.ColWidthPerc(99,
 					grid.Widget(lcRx,
 						container.Border(linestyle.Light),
-						container.BorderTitle("RX"),
+						container.BorderTitle(" Received "),
 						container.BorderTitleAlignCenter())),
 			))
 
 		c.lcRx = lcRx
-		c.graphDataRx = make([]float64, 0, TUI_GRAPH_MAX_POINTS)
-		c.graphDataRxTime = make([]string, 0, TUI_GRAPH_MAX_POINTS)
+		c.graphDataRx = newRingBuffer[float64](TUI_GRAPH_MAX_POINTS)
+		c.graphDataRxTime = newRingBuffer[time.Time](TUI_GRAPH_MAX_POINTS)
 	}
 
 	if showTx {
@@ -104,12 +101,12 @@ func newChart(showRx, showTx bool) (*chart, error) {
 				grid.ColWidthPerc(99,
 					grid.Widget(lcTx,
 						container.Border(linestyle.Light),
-						container.BorderTitle("TX"),
+						container.BorderTitle(" Transmitted "),
 						container.BorderTitleAlignCenter())),
 			))
 		c.lcTx = lcTx
-		c.graphDataTx = make([]float64, 0, TUI_GRAPH_MAX_POINTS)
-		c.graphDataTxTime = make([]string, 0, TUI_GRAPH_MAX_POINTS)
+		c.graphDataTx = newRingBuffer[float64](TUI_GRAPH_MAX_POINTS)
+		c.graphDataTxTime = newRingBuffer[time.Time](TUI_GRAPH_MAX_POINTS)
 	}
 
 	gridOpts, err := builder.Build()
@@ -127,18 +124,47 @@ func newChart(showRx, showTx bool) (*chart, error) {
 	}
 	c.container = con
 
+	ctrl, err := termdash.NewController(t, con, termdash.KeyboardSubscriber(c.kbHandler), termdash.ErrorHandler(c.termdashErrorHandler))
+	if err != nil {
+		return nil, err
+	}
+	c.controller = ctrl
+
 	return c, nil
 }
 
 func (c *chart) run() {
-	quitter := func(k *terminalapi.Keyboard) {
-		if k.Key == 'q' || k.Key == 'Q' {
-			cancel()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(REDRAW_INTERVAL):
+			y, x := c.getRxData()
+			if err := c.lcRx.Series("rx", y,
+				linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
+				linechart.SeriesXLabels(timeToMapForSeriesXLabels(x)),
+			); err != nil {
+				panic(err)
+			}
+
+			y, x = c.getTxData()
+			if err := c.lcTx.Series("tx", y,
+				linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
+				linechart.SeriesXLabels(timeToMapForSeriesXLabels(x)),
+			); err != nil {
+				panic(err)
+			}
+
+			if err := c.controller.Redraw(); err != nil {
+				panic(err)
+			}
 		}
 	}
+}
 
-	if err := termdash.Run(ctx, c.t, c.container, termdash.KeyboardSubscriber(quitter), termdash.RedrawInterval(REDRAW_INTERVAL)); err != nil {
-		panic(err)
+func (c *chart) kbHandler(k *terminalapi.Keyboard) {
+	if k.Key == 'q' || k.Key == 'Q' {
+		cancel()
 	}
 }
 
@@ -147,20 +173,11 @@ func (c *chart) updateRxData(rx uint64, n time.Time) {
 		return
 	}
 
-	if len(c.graphDataRx) < TUI_GRAPH_MAX_POINTS {
-		c.graphDataRx = append(c.graphDataRx, float64(rx))
-		c.graphDataRxTime = append(c.graphDataRxTime, n.Format("15:04:05.000"))
-	} else {
-		c.graphDataRx = append(c.graphDataRx[1:], float64(rx))
-		c.graphDataRxTime = append(c.graphDataRxTime[1:], n.Format("15:04:05.000"))
-	}
+	c.rxLock.Lock()
+	defer c.rxLock.Unlock()
 
-	if err := c.lcRx.Series("rx", c.graphDataRx,
-		linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
-		linechart.SeriesXLabels(timeToMapForSeriesXLabels(c.graphDataRxTime)),
-	); err != nil {
-		panic(err)
-	}
+	c.graphDataRx.Add(float64(rx))
+	c.graphDataRxTime.Add(n)
 }
 
 func (c *chart) updateTxData(tx uint64, n time.Time) {
@@ -168,134 +185,79 @@ func (c *chart) updateTxData(tx uint64, n time.Time) {
 		return
 	}
 
-	if len(c.graphDataTx) < TUI_GRAPH_MAX_POINTS {
-		c.graphDataTx = append(c.graphDataTx, float64(tx))
-		c.graphDataTxTime = append(c.graphDataTxTime, n.Format("15:04:05.000"))
-	} else {
-		c.graphDataTx = append(c.graphDataTx[1:], float64(tx))
-		c.graphDataTxTime = append(c.graphDataTxTime[1:], n.Format("15:04:05.000"))
-	}
+	c.txLock.Lock()
+	defer c.txLock.Unlock()
+	c.graphDataTx.Add(float64(tx))
+	c.graphDataTxTime.Add(n)
+}
 
-	if err := c.lcTx.Series("tx", c.graphDataTx,
-		linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
-		linechart.SeriesXLabels(timeToMapForSeriesXLabels(c.graphDataTxTime)),
-	); err != nil {
+func (c *chart) getRxData() ([]float64, []time.Time) {
+	c.rxLock.Lock()
+	defer c.rxLock.Unlock()
+
+	return c.graphDataRx.Items(), c.graphDataRxTime.Items()
+}
+
+func (c *chart) getTxData() ([]float64, []time.Time) {
+	c.txLock.Lock()
+	defer c.txLock.Unlock()
+
+	return c.graphDataTx.Items(), c.graphDataTxTime.Items()
+}
+
+func (c *chart) stop() {
+	c.controller.Close()
+	c.t.Close()
+}
+
+func (c *chart) termdashErrorHandler(err error) {
+	if err != nil {
 		panic(err)
 	}
 }
 
-func (c *chart) stop() {
-	c.t.Close()
-}
-
-// func handleStats() {
-// 	var lastRx, lastTx uint64
-// 	var graphDataRx, graphDataTx []float64
-// 	var graphDataRxTime, graphDataTxTime []string
-// 	var lcRx, lcTx *linechart.LineChart
-
-// 	dash := "-"
-
-// 	if showGraph {
-// 	}
-
-// 	for {
-// 		var currRx, currTx uint64
-// 		var n time.Time
-
-// 		select {
-// 		case <-ctx.Done():
-// 			return
-// 		case s := <-statsChan:
-// 			currRx = s.rxBytes
-// 			currTx = s.txBytes
-// 			n = s.time
-// 		}
-
-// 		if trackRx {
-// 			// TODO: handle wraparound
-// 			actRx = currRx - lastRx
-// 			statsHandleRxData(n, actRx)
-// 			lastRx = currRx
-// 		}
-
-// 		if trackTx {
-// 			actTx = currTx - lastTx
-// 			statsHandleTxData(n, actTx)
-// 			lastTx = currTx
-// 		}
-
-// 		if printRate {
-// 			var rx, tx string
-// 			var print bool
-// 			if trackRx && actRx > rxThreshold {
-// 				rx = humanize.Bytes(actRx)
-// 				print = true
-// 			} else {
-// 				rx = dash
-// 			}
-// 			if trackTx && actTx > txThreshold {
-// 				tx = humanize.Bytes(actTx)
-// 				print = true
-// 			} else {
-// 				tx = dash
-// 			}
-// 			if print {
-// 				fmt.Printf("%s: rx: %-10s tx: %-10s\n", n.Format("15:04:05.000"), rx, tx)
-// 			}
-// 		} else if showGraph {
-// 		}
-// 	}
-// }
-
-func timeToMapForSeriesXLabels(t []string) map[int]string {
-	if true {
-		return nil
-	}
+func timeToMapForSeriesXLabels(t []time.Time) map[int]string {
 	m := make(map[int]string)
 	for i, v := range t {
-		if v == "" {
+		if v.IsZero() {
 			m[i] = " "
 		} else {
-			m[i] = v
+			m[i] = v.Format("15:04:05.000")
 		}
 	}
 	return m
 }
 
-// func getRxTxValues(txrxInfo *bpf.BPFMap) (uint64, uint64, error) {
-// 	var received, transferred uint64
+type ringBuffer[T any] struct {
+	pos   int
+	items []T
+	cap   int
+}
 
-// 	if trackRx {
-// 		key := 0
-// 		values := make([]byte, 8*runtime.NumCPU())
-// 		err := txrxInfo.GetValueReadInto(unsafe.Pointer(&key), &values)
-// 		if err != nil {
-// 			return 0, 0, err
-// 		}
-// 		last := 0
-// 		for i := 0; i < runtime.NumCPU(); i++ {
-// 			cnt := binary.LittleEndian.Uint64(values[last : last+8])
-// 			last += 8
-// 			received += cnt
-// 		}
-// 	}
+func newRingBuffer[T any](size int) *ringBuffer[T] {
+	if size <= 0 {
+		panic(fmt.Sprintf("invalid size %d", size))
+	}
 
-// 	if trackTx {
-// 		key := 1
-// 		values := make([]byte, 8*runtime.NumCPU())
-// 		err := txrxInfo.GetValueReadInto(unsafe.Pointer(&key), &values)
-// 		if err != nil {
-// 			return 0, 0, err
-// 		}
+	return &ringBuffer[T]{
+		items: make([]T, 0, size),
+		cap:   size,
+	}
+}
 
-// 		last := 0
-// 		for i := 0; i < runtime.NumCPU(); i++ {
-// 			cnt := binary.LittleEndian.Uint64(values[last : last+8])
-// 			last += 8
-// 			transferred += uint64(cnt)
-// 		}
-// 	}
+func (r *ringBuffer[T]) Add(item T) {
+	if r.pos >= len(r.items) {
+		r.items = append(r.items, item)
+	} else {
+		r.items[r.pos] = item
+	}
+	r.pos = (r.pos + 1) % cap(r.items)
+}
 
-// 	return received, transferred, nil
-// }
+func (r *ringBuffer[T]) Len() int {
+	return len(r.items)
+}
+
+func (r *ringBuffer[T]) Items() []T {
+	return append(r.items[r.pos:], r.items[:r.pos]...)
+}

@@ -6,10 +6,13 @@ CC := $(or $(CC),gcc)
 CLANG := $(or $(CLANG),clang)
 # In Archlinux, libelf needs libzstd
 LIBELF_LDFLAGS := $(shell pkg-config --static --libs libelf)
+CGO_CFLAGS := "-I$(abspath ./build/libbpf)"
+CGO_LDFLAGS := "$(abspath ./build/libbpf/libbpf.a)"
 
 network-microburst: network-microburst.bpf.o build/libbpf/libbpf.a *.go
-	@CGO_CFLAGS="-I$(abspath ./build/libbpf)" \
-	CGO_LDFLAGS="$(abspath ./build/libbpf/libbpf.a)" \
+	@CC=$(CC) \
+	CGO_CFLAGS="$(CGO_CFLAGS)" \
+	CGO_LDFLAGS="$(CGO_LDFLAGS)" \
 	CGO_ENABLED=1 \
 		go build -tags netgo -ldflags='-s -w -extldflags "-static $(LIBELF_LDFLAGS)"' -o network-microburst
 
@@ -41,6 +44,14 @@ release:
 	mkdir -p release
 	DOCKER_ID=$$(docker create network-microburst) && \
 		docker cp $${DOCKER_ID}:/src/network-microburst/release .
+
+.PHONY: test
+test: network-microburst
+	@CC=$(CC) \
+	CGO_CFLAGS="$(CGO_CFLAGS)" \
+	CGO_LDFLAGS="$(CGO_LDFLAGS)" \
+	CGO_ENABLED=1 \
+		go test ./...
 
 .PHONY: clean
 clean:
