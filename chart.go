@@ -139,20 +139,23 @@ func (c *chart) run() {
 		case <-ctx.Done():
 			return
 		case <-time.After(REDRAW_INTERVAL):
-			y, x := c.getRxData()
-			if err := c.lcRx.Series("rx", y,
-				linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
-				linechart.SeriesXLabels(timeToMapForSeriesXLabels(x)),
-			); err != nil {
-				panic(err)
+			if trackRx {
+				y, x := c.getRxData()
+				if err := c.lcRx.Series("rx", y,
+					linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
+					linechart.SeriesXLabels(timeToMapForSeriesXLabels(x)),
+				); err != nil {
+					panic(err)
+				}
 			}
-
-			y, x = c.getTxData()
-			if err := c.lcTx.Series("tx", y,
-				linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
-				linechart.SeriesXLabels(timeToMapForSeriesXLabels(x)),
-			); err != nil {
-				panic(err)
+			if trackTx {
+				y, x := c.getTxData()
+				if err := c.lcTx.Series("tx", y,
+					linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
+					linechart.SeriesXLabels(timeToMapForSeriesXLabels(x)),
+				); err != nil {
+					panic(err)
+				}
 			}
 
 			if err := c.controller.Redraw(); err != nil {
