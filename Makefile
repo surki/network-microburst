@@ -6,8 +6,10 @@ CC := $(or $(CC),gcc)
 CLANG := $(or $(CLANG),clang)
 # In Archlinux, libelf needs libzstd
 LIBELF_LDFLAGS := $(shell pkg-config --static --libs libelf)
-CGO_CFLAGS := "-I$(abspath ./build/libbpf)"
-CGO_LDFLAGS := "$(abspath ./build/libbpf/libbpf.a)"
+LIBBPF_DIR := "./build/libbpf"
+LIBBPF_A := "./build/libbpf/libbpf.a"
+CGO_CFLAGS := "-I$(abspath ${LIBBPF_DIR})"
+CGO_LDFLAGS := "$(abspath ${LIBBPF_A})"
 
 network-microburst: network-microburst.bpf.o build/libbpf/libbpf.a *.go
 	@CC=$(CC) \
@@ -39,19 +41,24 @@ vmlinux:
 	bpftool btf dump file /sys/kernel/btf/vmlinux  format c > include/${ARCH}/vmlinux.h
 
 .PHONY: release
-release:
-	docker build -t network-microburst .
+release: image
 	mkdir -p release
 	DOCKER_ID=$$(docker create network-microburst) && \
 		docker cp $${DOCKER_ID}:/src/network-microburst/release .
 
 .PHONY: test
-test: network-microburst
-	@CC=$(CC) \
-	CGO_CFLAGS="$(CGO_CFLAGS)" \
-	CGO_LDFLAGS="$(CGO_LDFLAGS)" \
-	CGO_ENABLED=1 \
-		go test ./...
+test: image
+	docker run -it \
+		-e CGO_CFLAGS="/src/network-microburst/${LIBBPF_DIR}" \
+		-e CGO_LDFLAGS="/src/network-microburst/${LIBBPF_A}" \
+		-e CGO_ENABLED=1 \
+		--entrypoint /usr/local/go/bin/go \
+		network-microburst \
+			test ./...
+
+.PHONY: image
+image:
+	docker build -t network-microburst .
 
 .PHONY: clean
 clean:
