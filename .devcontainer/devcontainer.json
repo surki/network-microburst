@@ -1,0 +1,14 @@
+{
+    "build": { "dockerfile": "Dockerfile" },
+  
+    "customizations": {
+      "vscode": {
+        "extensions": [
+            "dbaeumer.vscode-eslint",
+            "golang.go",
+            "neonxp.gotools",
+            "ms-vscode.cpptools"
+        ]
+      }
+    }
+  }
