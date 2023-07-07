@@ -19,6 +19,8 @@ import (
 	bpf "github.com/aquasecurity/libbpfgo"
 	"github.com/aquasecurity/libbpfgo/helpers"
 	"github.com/dustin/go-humanize"
+	"github.com/prometheus/procfs"
+	"golang.org/x/sys/unix"
 )
 
 var (
@@ -63,8 +65,17 @@ func init() {
 	flag.BoolVar(&trackTx, "track-tx", true, "track network transfers")
 }
 
+var btime uint64 = 0
+
 func main() {
 	flag.Parse()
+
+	fs, err := procfs.NewFS("/proc")
+	stats, err := fs.Stat()
+	if err != nil {
+		panic(err)
+	}
+	btime = stats.BootTime
 
 	statsInit()
 
@@ -83,12 +94,9 @@ func main() {
 
 	bpf.SetLoggerCbs(bpf.Callbacks{
 		Log: func(level int, msg string) {
-			log.Printf("%s", msg)
-		},
-		LogFilters: []func(libLevel int, msg string) bool{
-			func(libLevel int, msg string) bool {
-				return debug || !(libLevel < 2)
-			},
+			if debug {
+				log.Printf("%s", msg)
+			}
 		},
 	})
 
@@ -112,6 +120,11 @@ func main() {
 		}
 	}
 
+	err = module.InitGlobalVariable("nr_cpus", uint32(runtime.NumCPU()))
+	if err != nil {
+		panic(err)
+	}
+
 	err = module.BPFLoadObject()
 	if err != nil {
 		panic(err)
@@ -122,6 +135,10 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
+		if debug {
+			log.Printf("attaching program %q", prog.Name())
+		}
+
 		_, err = prog.AttachGeneric()
 		if err != nil {
 			panic(fmt.Sprintf("failed to attach program (%s): %v", prog.Name(), err))
@@ -133,35 +150,69 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
+		if debug {
+			log.Printf("attaching program %q", prog.Name())
+		}
 		_, err = prog.AttachGeneric()
 		if err != nil {
 			panic(fmt.Sprintf("failed to attach program (%s): %v", prog.Name(), err))
 		}
 	}
 
-	iter := module.Iterator()
-	for {
-		prog := iter.NextProgram()
-		if prog == nil {
-			break
+	prog, err := module.GetProgram("calc_metrics")
+	if err != nil {
+		panic(err)
+	}
+	for i := 0; i < runtime.NumCPU(); i++ {
+		fd, err := unix.PerfEventOpen(&unix.PerfEventAttr{
+			Type:   unix.PERF_TYPE_SOFTWARE,
+			Config: unix.PERF_COUNT_SW_CPU_CLOCK,
+			Size:   uint32(unsafe.Sizeof(unix.PerfEventAttr{})),
+			Sample: uint64(burstWindow.Nanoseconds()), //10_000_000,
+			// Bits:   unix.PerfBitDisabled | unix.PerfBitFreq,
+		}, -1, i, -1, 0)
+		if err != nil {
+			panic(fmt.Errorf("open perf event: %w", err))
 		}
+		defer func() {
+			if err := syscall.Close(fd); err != nil {
+				panic(err)
+			}
+		}()
 
-		if prog.Name() == "" {
-
-		}
 		if debug {
 			log.Printf("attaching program %q", prog.Name())
 		}
+
+		_, err = prog.AttachPerfEvent(fd)
+		if err != nil {
+			panic(fmt.Sprintf("failed to attach program (%s): %v", prog.Name(), err))
+		}
+
+		break
 	}
 
 	if debug {
 		go helpers.TracePipeListen()
 	}
 
-	txrxInfo, err := module.GetMap("txrx_info")
+	eventsChannel := make(chan []byte)
+	rb, err := module.InitRingBuf("events", eventsChannel)
 	if err != nil {
 		panic(err)
 	}
+	defer func() {
+		rb.Stop()
+		rb.Close()
+	}()
+
+	rb.Poll(300)
+	rb.Start()
+
+	// txrxInfo, err := module.GetMap("txrx_info")
+	// if err != nil {
+	// 	panic(err)
+	// }
 
 	if showGraph {
 		chrt, err = newChart(trackRx, trackTx)
@@ -176,49 +227,81 @@ func main() {
 		}()
 	}
 
+	go func() {
+		type foo struct {
+			cpu     uint64
+			ts      uint64
+			rxBytes uint64
+			txBytes uint64
+		}
+
+		for {
+			select {
+			case b := <-eventsChannel:
+				// cpu := binary.LittleEndian.Uint64(b[0:8])
+				ts := binary.LittleEndian.Uint64(b[8:16])
+				currRx := binary.LittleEndian.Uint64(b[16:24])
+				currTx := binary.LittleEndian.Uint64(b[24:32])
+				t := time.Unix(int64(btime), int64(ts))
+
+				// fmt.Printf("%s: rx: %-10s tx: %-10s @@@ %s ns=%d btime=%d\n", t.Format("15:04:05.000"), humanize.Bytes(currRx), humanize.Bytes(currTx), time.Since(t), ns, btime)
+				if showGraph {
+					if trackTx {
+						chrt.updateTxData(currTx, t)
+					}
+					if trackRx {
+						chrt.updateRxData(currRx, t)
+					}
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		handleStats()
 	}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			// TODO: we rely on the go timer for calculating
-			// rate, so our burst rate calculation is going to
-			// be only as good as its granularity/accuracy. The
-			// right thing to do is to compute this in the bpf
-			// code itself (using bpf_timer etc) and then
-			// publish that over perf event channel.
-			//
-			time.Sleep(burstWindow)
+	// wg.Add(1)
+	// go func() {
+	// 	defer wg.Done()
+	// 	for {
+	// 		// TODO: we rely on the go timer for calculating
+	// 		// rate, so our burst rate calculation is going to
+	// 		// be only as good as its granularity/accuracy. The
+	// 		// right thing to do is to compute this in the bpf
+	// 		// code itself (using bpf_timer etc) and then
+	// 		// publish that over perf event channel.
+	// 		//
+	// 		time.Sleep(burstWindow)
 
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
+	// 		select {
+	// 		case <-ctx.Done():
+	// 			return
+	// 		default:
+	// 		}
 
-			n := time.Now()
+	// 		n := time.Now()
 
-			currRx, currTx, err := getRxTxValues(txrxInfo)
-			if err != nil {
-				panic(err)
-			}
+	// 		currRx, currTx, err := getRxTxValues(txrxInfo)
+	// 		if err != nil {
+	// 			panic(err)
+	// 		}
 
-			select {
-			case statsChan <- rxTxStats{
-				rxBytes: currRx,
-				txBytes: currTx,
-				time:    n,
-			}:
-			default:
-				// log.Printf("dropping stats update")
-			}
-		}
-	}()
+	// 		select {
+	// 		case statsChan <- rxTxStats{
+	// 			rxBytes: currRx,
+	// 			txBytes: currTx,
+	// 			time:    n,
+	// 		}:
+	// 		default:
+	// 			// log.Printf("dropping stats update")
+	// 		}
+	// 	}
+	// }()
 
 	<-ctx.Done()
 
