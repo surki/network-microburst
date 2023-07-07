@@ -143,7 +143,7 @@ func (c *chart) run() {
 		case <-ctx.Done():
 			return
 		case <-time.After(REDRAW_INTERVAL):
-			if c.showTx {
+			if c.showRx {
 				y, x := c.getRxData()
 				if err := c.lcRx.Series("rx", y,
 					linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
@@ -152,7 +152,7 @@ func (c *chart) run() {
 					panic(err)
 				}
 			}
-			if c.showRx {
+			if c.showTx {
 				y, x := c.getTxData()
 				if err := c.lcTx.Series("tx", y,
 					linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
