@@ -32,6 +32,8 @@ type chart struct {
 	graphDataTxTime *ringBuffer[time.Time]
 	lcRx            *linechart.LineChart
 	lcTx            *linechart.LineChart
+	showTx          bool
+	showRx          bool
 }
 
 func newChart(showRx, showTx bool) (*chart, error) {
@@ -41,7 +43,9 @@ func newChart(showRx, showTx bool) (*chart, error) {
 	}
 
 	c := &chart{
-		t: t,
+		t:      t,
+		showTx: showTx,
+		showRx: showRx,
 	}
 
 	builder := grid.New()
@@ -139,20 +143,23 @@ func (c *chart) run() {
 		case <-ctx.Done():
 			return
 		case <-time.After(REDRAW_INTERVAL):
-			y, x := c.getRxData()
-			if err := c.lcRx.Series("rx", y,
-				linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
-				linechart.SeriesXLabels(timeToMapForSeriesXLabels(x)),
-			); err != nil {
-				panic(err)
+			if c.showRx {
+				y, x := c.getRxData()
+				if err := c.lcRx.Series("rx", y,
+					linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
+					linechart.SeriesXLabels(timeToMapForSeriesXLabels(x)),
+				); err != nil {
+					panic(err)
+				}
 			}
-
-			y, x = c.getTxData()
-			if err := c.lcTx.Series("tx", y,
-				linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
-				linechart.SeriesXLabels(timeToMapForSeriesXLabels(x)),
-			); err != nil {
-				panic(err)
+			if c.showTx {
+				y, x := c.getTxData()
+				if err := c.lcTx.Series("tx", y,
+					linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
+					linechart.SeriesXLabels(timeToMapForSeriesXLabels(x)),
+				); err != nil {
+					panic(err)
+				}
 			}
 
 			if err := c.controller.Redraw(); err != nil {
