@@ -27,8 +27,17 @@ func statsInit() {
 		txHist = hdrhistogram.New(1, int64(10000000000), 3)
 	}
 	if saveGraphHtmlPath != "" {
-		rxData = ring.New(10000)
-		txData = ring.New(10000)
+		// We will try to have at least last 10 seconds of data.
+		// But if it crosses 1 million points, we will limit it to 1
+		// million. This is to avoid the browser from hanging.
+		// TODO: Maybe we can parameterize this.
+		numSamplesPerSec := int(time.Second / burstWindow)
+		numSamples := numSamplesPerSec * 10
+		if numSamples > 1_000_000 {
+			numSamples = 1_000_000
+		}
+		rxData = ring.New(numSamples)
+		txData = ring.New(numSamples)
 	}
 }
 

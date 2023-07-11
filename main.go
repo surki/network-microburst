@@ -168,7 +168,9 @@ func main() {
 			Type:   unix.PERF_TYPE_SOFTWARE,
 			Config: unix.PERF_COUNT_SW_CPU_CLOCK,
 			Size:   uint32(unsafe.Sizeof(unix.PerfEventAttr{})),
-			Sample: uint64(burstWindow.Nanoseconds()), //10_000_000,
+			// We will use periodic sampling, we will not use the frequency
+			Sample: uint64(burstWindow.Nanoseconds()),
+			// Sample: uint64(1_000_0),
 			// Bits:   unix.PerfBitDisabled | unix.PerfBitFreq,
 		}, -1, i, -1, 0)
 		if err != nil {
@@ -202,17 +204,10 @@ func main() {
 		panic(err)
 	}
 	defer func() {
-		rb.Stop()
 		rb.Close()
 	}()
 
 	rb.Poll(300)
-	rb.Start()
-
-	// txrxInfo, err := module.GetMap("txrx_info")
-	// if err != nil {
-	// 	panic(err)
-	// }
 
 	if showGraph {
 		chrt, err = newChart(trackRx, trackTx)
@@ -227,13 +222,9 @@ func main() {
 		}()
 	}
 
+	wg.Add(1)
 	go func() {
-		type foo struct {
-			cpu     uint64
-			ts      uint64
-			rxBytes uint64
-			txBytes uint64
-		}
+		defer wg.Done()
 
 		for {
 			select {
@@ -242,17 +233,18 @@ func main() {
 				ts := binary.LittleEndian.Uint64(b[8:16])
 				currRx := binary.LittleEndian.Uint64(b[16:24])
 				currTx := binary.LittleEndian.Uint64(b[24:32])
-				t := time.Unix(int64(btime), int64(ts))
+				n := time.Unix(int64(btime), int64(ts))
 
-				// fmt.Printf("%s: rx: %-10s tx: %-10s @@@ %s ns=%d btime=%d\n", t.Format("15:04:05.000"), humanize.Bytes(currRx), humanize.Bytes(currTx), time.Since(t), ns, btime)
-				if showGraph {
-					if trackTx {
-						chrt.updateTxData(currTx, t)
-					}
-					if trackRx {
-						chrt.updateRxData(currRx, t)
-					}
+				select {
+				case statsChan <- rxTxStats{
+					rxBytes: currRx,
+					txBytes: currTx,
+					time:    n,
+				}:
+				default:
+					// log.Printf("dropping stats update")
 				}
+
 			case <-ctx.Done():
 				return
 			}
@@ -265,9 +257,17 @@ func main() {
 		handleStats()
 	}()
 
+	// txrxInfo, err := module.GetMap("txrx_info")
+	// if err != nil {
+	// 	panic(err)
+	// }
+
 	// wg.Add(1)
 	// go func() {
 	// 	defer wg.Done()
+
+	// 	var lastRx, lastTx uint64
+
 	// 	for {
 	// 		// TODO: we rely on the go timer for calculating
 	// 		// rate, so our burst rate calculation is going to
@@ -291,10 +291,23 @@ func main() {
 	// 			panic(err)
 	// 		}
 
+	// 		var actRx, actTx uint64
+
+	// 		if trackRx {
+	// 			// TODO: handle wraparound
+	// 			actRx = currRx - lastRx
+	// 			lastRx = currRx
+	// 		}
+
+	// 		if trackTx {
+	// 			actTx = currTx - lastTx
+	// 			lastTx = currTx
+	// 		}
+
 	// 		select {
 	// 		case statsChan <- rxTxStats{
-	// 			rxBytes: currRx,
-	// 			txBytes: currTx,
+	// 			rxBytes: actRx,
+	// 			txBytes: actTx,
 	// 			time:    n,
 	// 		}:
 	// 		default:
@@ -319,64 +332,51 @@ func main() {
 }
 
 func handleStats() {
-	var lastRx, lastTx uint64
+	var lastTime time.Time
 
 	for {
-		var currRx, currTx uint64
-		var n time.Time
+		var s rxTxStats
 
 		select {
 		case <-ctx.Done():
 			return
-		case s := <-statsChan:
-			currRx = s.rxBytes
-			currTx = s.txBytes
-			n = s.time
+		case s = <-statsChan:
 		}
 
-		// TODO: when calculating rate for the current window,
-		// handle missed updates due to timer inaccuracy/misses
-
-		var actRx, actTx uint64
-
 		if trackRx {
-			// TODO: handle wraparound
-			actRx = currRx - lastRx
-			statsHandleRxData(n, actRx)
-			lastRx = currRx
+			statsHandleRxData(s.time, s.rxBytes)
 		}
 
 		if trackTx {
-			actTx = currTx - lastTx
-			statsHandleTxData(n, actTx)
-			lastTx = currTx
+			statsHandleTxData(s.time, s.txBytes)
 		}
 
 		if showGraph {
 			if trackTx {
-				chrt.updateTxData(actTx, n)
+				chrt.updateTxData(s.txBytes, s.time)
 			}
 			if trackRx {
-				chrt.updateRxData(actRx, n)
+				chrt.updateRxData(s.rxBytes, s.time)
 			}
 		} else {
 			var rx, tx string
 			var print bool
-			if trackRx && actRx > rxThreshold {
-				rx = humanize.Bytes(actRx)
+			if trackRx && s.rxBytes > rxThreshold {
+				rx = humanize.Bytes(s.rxBytes)
 				print = true
 			} else {
 				rx = "-"
 			}
-			if trackTx && actTx > txThreshold {
-				tx = humanize.Bytes(actTx)
+			if trackTx && s.txBytes > txThreshold {
+				tx = humanize.Bytes(s.txBytes)
 				print = true
 			} else {
 				tx = "-"
 			}
 			if print {
-				fmt.Printf("%s: rx: %-10s tx: %-10s\n", n.Format("15:04:05.000"), rx, tx)
+				fmt.Printf("%s [%8v]: rx: %-10s tx: %-10s\n", s.time.Format("15:04:05.000"), s.time.Sub(lastTime).Round(time.Microsecond), rx, tx)
 			}
+			lastTime = s.time
 		}
 	}
 }
