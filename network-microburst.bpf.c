@@ -101,12 +101,11 @@ struct {
     __uint(max_entries, 256 * 1024);
 } events SEC(".maps");
 
-struct xfer_event {
-    __u64 cpu;
+struct xfer_metric {
     __u64 ts;
     __u64 rx_bytes;
     __u64 tx_bytes;
-} xfer_event;
+} xfer_metric;
 
 struct txrx_last_info {
     __u64 rx_bytes;
@@ -125,7 +124,7 @@ SEC("perf_event")
 int calc_metrics(struct bpf_perf_event_data *ctx)
 {
     __u32 key = 0;
-    struct xfer_event *event;
+    struct xfer_metric *event;
     struct txrx_last_info *value;
     __u64 curr_rx_bytes;
     __u64 curr_tx_bytes;
@@ -153,7 +152,6 @@ int calc_metrics(struct bpf_perf_event_data *ctx)
                 event->tx_bytes = 0;
             }
             event->ts = curr_ts;
-            event->cpu = bpf_get_smp_processor_id();
 
             bpf_ringbuf_submit(event, 0);
         }

@@ -16,6 +16,8 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/HdrHistogram/hdrhistogram-go"
+	"github.com/aquasecurity/libbpfgo"
 	bpf "github.com/aquasecurity/libbpfgo"
 	"github.com/aquasecurity/libbpfgo/helpers"
 	"github.com/dustin/go-humanize"
@@ -39,6 +41,7 @@ var (
 	statsChan         = make(chan rxTxStats, 500)
 	wg                sync.WaitGroup
 	chrt              *chart
+	timerHist         *hdrhistogram.Histogram
 )
 
 type rxTxStats struct {
@@ -159,40 +162,15 @@ func main() {
 		}
 	}
 
-	prog, err := module.GetProgram("calc_metrics")
+	perfFd, err := setupPerfTimer(module)
 	if err != nil {
 		panic(err)
 	}
-	for i := 0; i < runtime.NumCPU(); i++ {
-		fd, err := unix.PerfEventOpen(&unix.PerfEventAttr{
-			Type:   unix.PERF_TYPE_SOFTWARE,
-			Config: unix.PERF_COUNT_SW_CPU_CLOCK,
-			Size:   uint32(unsafe.Sizeof(unix.PerfEventAttr{})),
-			// We will use periodic sampling, we will not use the frequency
-			Sample: uint64(burstWindow.Nanoseconds()),
-			// Sample: uint64(1_000_0),
-			// Bits:   unix.PerfBitDisabled | unix.PerfBitFreq,
-		}, -1, i, -1, 0)
-		if err != nil {
-			panic(fmt.Errorf("open perf event: %w", err))
+	defer func() {
+		if err := syscall.Close(perfFd); err != nil {
+			panic(err)
 		}
-		defer func() {
-			if err := syscall.Close(fd); err != nil {
-				panic(err)
-			}
-		}()
-
-		if debug {
-			log.Printf("attaching program %q", prog.Name())
-		}
-
-		_, err = prog.AttachPerfEvent(fd)
-		if err != nil {
-			panic(fmt.Sprintf("failed to attach program (%s): %v", prog.Name(), err))
-		}
-
-		break
-	}
+	}()
 
 	if debug {
 		go helpers.TracePipeListen()
@@ -229,10 +207,10 @@ func main() {
 		for {
 			select {
 			case b := <-eventsChannel:
-				// cpu := binary.LittleEndian.Uint64(b[0:8])
-				ts := binary.LittleEndian.Uint64(b[8:16])
-				currRx := binary.LittleEndian.Uint64(b[16:24])
-				currTx := binary.LittleEndian.Uint64(b[24:32])
+				ts := binary.LittleEndian.Uint64(b[0:8])
+				currRx := binary.LittleEndian.Uint64(b[8:16])
+				currTx := binary.LittleEndian.Uint64(b[16:24])
+
 				n := time.Unix(int64(btime), int64(ts))
 
 				select {
@@ -329,9 +307,18 @@ func main() {
 	fmt.Println("")
 
 	statsFinish()
+
+	if debug {
+		fmt.Println("timer accuracy (in microseconds):")
+		fmt.Println(getHistogram(timerHist))
+	}
 }
 
 func handleStats() {
+	if debug {
+		timerHist = hdrhistogram.New(1, int64(10_000_000_000), 5)
+	}
+
 	var lastTime time.Time
 
 	for {
@@ -373,10 +360,16 @@ func handleStats() {
 			} else {
 				tx = "-"
 			}
+
+			timerAccuracy := s.time.Sub(lastTime).Round(time.Microsecond)
 			if print {
-				fmt.Printf("%s [%10v]: rx: %-10s tx: %-10s\n", s.time.Format("15:04:05.000"), s.time.Sub(lastTime).Round(time.Microsecond), rx, tx)
+				fmt.Printf("%s [%10v]: rx: %-10s tx: %-10s\n", s.time.Format("15:04:05.000"), timerAccuracy, rx, tx)
 			}
 			lastTime = s.time
+
+			if debug {
+				timerHist.RecordValue(int64(timerAccuracy))
+			}
 		}
 	}
 }
@@ -416,4 +409,53 @@ func getRxTxValues(txrxInfo *bpf.BPFMap) (uint64, uint64, error) {
 	}
 
 	return received, transferred, nil
+}
+
+func setupPerfTimer(module *libbpfgo.Module) (int, error) {
+	prog, err := module.GetProgram("calc_metrics")
+	if err != nil {
+		return -1, fmt.Errorf("error getting program for calc_metrics: %w", err)
+	}
+
+	cpuChosen := chooseCpuForPerfTimer()
+	fd, err := unix.PerfEventOpen(&unix.PerfEventAttr{
+		Type:   unix.PERF_TYPE_SOFTWARE,
+		Config: unix.PERF_COUNT_SW_CPU_CLOCK,
+		Size:   uint32(unsafe.Sizeof(unix.PerfEventAttr{})),
+		// We will use periodic sampling, we will not use the frequency
+		Sample: uint64(burstWindow.Nanoseconds()),
+		// Sample: uint64(1_000_0),
+		// Bits:   unix.PerfBitDisabled | unix.PerfBitFreq,
+	}, -1, cpuChosen, -1, 0)
+	if err != nil {
+		return -1, fmt.Errorf("open perf event: %w", err)
+	}
+
+	_, err = prog.AttachPerfEvent(fd)
+	if err != nil {
+		_ = syscall.Close(fd)
+		return -1, fmt.Errorf("failed to attach program (%s): %v", prog.Name(), err)
+	}
+
+	if debug {
+		log.Printf("setup perf timer on cpu %d with %s periodic sampling", cpuChosen, burstWindow)
+	}
+
+	return fd, nil
+}
+
+func chooseCpuForPerfTimer() int {
+	// We should choose a CPU that's not having too many irqs assigned
+	// to it.  Since cpu 0 is usually the busiest, we'll probably choose
+	// something from the end
+	//
+	// TODO: Properly choose a CPU by looking at the irq assignments,
+	// cpu topology etc
+
+	cpu := runtime.NumCPU() - 1
+	if cpu < 0 {
+		cpu = 0
+	}
+
+	return cpu
 }
