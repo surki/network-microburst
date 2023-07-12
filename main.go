@@ -374,7 +374,7 @@ func handleStats() {
 				tx = "-"
 			}
 			if print {
-				fmt.Printf("%s [%8v]: rx: %-10s tx: %-10s\n", s.time.Format("15:04:05.000"), s.time.Sub(lastTime).Round(time.Microsecond), rx, tx)
+				fmt.Printf("%s [%10v]: rx: %-10s tx: %-10s\n", s.time.Format("15:04:05.000"), s.time.Sub(lastTime).Round(time.Microsecond), rx, tx)
 			}
 			lastTime = s.time
 		}
