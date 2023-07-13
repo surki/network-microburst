@@ -296,7 +296,7 @@ func main() {
 
 	<-ctx.Done()
 
-	fmt.Println("waiting for workers to finish...")
+	fmt.Printf("\nwaiting for workers to finish...\n")
 
 	wg.Wait()
 
@@ -309,8 +309,10 @@ func main() {
 	statsFinish()
 
 	if debug {
-		fmt.Println("timer accuracy (in microseconds):")
-		fmt.Println(getHistogram(timerHist))
+		fmt.Printf("Timer accuracy: \n")
+		fmt.Printf("Mean: %v StdDev: %v Min: %v Max: %v\n", time.Duration(timerHist.Mean()), time.Duration(int64(timerHist.StdDev())), time.Duration(timerHist.Min()), time.Duration(timerHist.Max()))
+		fmt.Printf("Histogram:\n")
+		fmt.Println(getHistogram(timerHist, func(v float64) string { return time.Duration(int64(v)).String() }))
 	}
 }
 
@@ -361,7 +363,7 @@ func handleStats() {
 				tx = "-"
 			}
 
-			timerAccuracy := s.time.Sub(lastTime).Round(time.Microsecond)
+			timerAccuracy := s.time.Sub(lastTime)
 			if print {
 				fmt.Printf("%s [%10v]: rx: %-10s tx: %-10s\n", s.time.Format("15:04:05.000"), timerAccuracy, rx, tx)
 			}

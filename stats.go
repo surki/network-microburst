@@ -44,10 +44,10 @@ func statsInit() {
 func statsFinish() {
 	if printHistogram {
 		fmt.Println("Received (in KiB)")
-		fmt.Println(getHistogram(rxHist))
+		fmt.Println(getHistogram(rxHist, nil))
 
 		fmt.Println("Transferred (in KiB)")
-		fmt.Println(getHistogram(txHist))
+		fmt.Println(getHistogram(txHist, nil))
 	}
 
 	if saveGraphHtmlPath != "" {
@@ -180,7 +180,9 @@ type Bucket struct {
 
 var barChar = "■"
 
-func getHistogram(hdrhist *hdrhistogram.Histogram) string {
+type intervalFormatter func(float64) string
+
+func getHistogram(hdrhist *hdrhistogram.Histogram, interFmt intervalFormatter) string {
 	var o strings.Builder
 	buckets := getHistogramBuckets(hdrhist)
 	if len(buckets) == 0 {
@@ -189,12 +191,12 @@ func getHistogram(hdrhist *hdrhistogram.Histogram) string {
 	}
 
 	//fmt.Fprintf(&o, "\n%v:\n", title)
-	fmt.Fprint(&o, getResponseHistogram(buckets))
+	fmt.Fprint(&o, getResponseHistogram(buckets, interFmt))
 
 	return o.String()
 }
 
-func getResponseHistogram(buckets []Bucket) string {
+func getResponseHistogram(buckets []Bucket, interFmt intervalFormatter) string {
 	var maxCount int64
 	for _, b := range buckets {
 		if b.Count > maxCount {
@@ -208,7 +210,11 @@ func getResponseHistogram(buckets []Bucket) string {
 		if maxCount > 0 {
 			barLen = (buckets[i].Count*40 + maxCount/2) / maxCount
 		}
-		res.WriteString(fmt.Sprintf("%15.3f [%10d]\t|%v\n", buckets[i].Interval, buckets[i].Count, strings.Repeat(barChar, int(barLen))))
+		if interFmt != nil {
+			res.WriteString(fmt.Sprintf("%15v [%10d]\t|%v\n", interFmt(buckets[i].Interval), buckets[i].Count, strings.Repeat(barChar, int(barLen))))
+		} else {
+			res.WriteString(fmt.Sprintf("%15v [%10d]\t|%v\n", buckets[i].Interval, buckets[i].Count, strings.Repeat(barChar, int(barLen))))
+		}
 	}
 
 	return res.String()
@@ -245,19 +251,28 @@ func getHistogramBuckets(hdrhist *hdrhistogram.Histogram) []Bucket {
 	// buckets here.
 	bi := 0
 	for i := 0; i < len(bars)-1; {
-		if bars[i].From >= buckets[bi] && bars[i].To <= buckets[bi] {
+		if bars[i].From <= buckets[bi] && bars[i].To <= buckets[bi] {
+			// Entire bar is in this bucket
 			counts[bi] += bars[i].Count
 			i++
-		} else if bars[i].From <= buckets[bi] {
-			// TODO: Properly handle overlapping buckets
-			id := bi - 1
-			if id < 0 {
-				id = 0
+		} else if bars[i].From <= buckets[bi] && bars[i].To > buckets[bi] {
+			// Bar overlaps this bucket
+			// Take a ratio of the count based on the overlap
+			rng := bars[i].To - bars[i].From
+			rng_A := buckets[bi] - bars[i].From
+			rng_B := bars[i].To - buckets[bi]
+			counts[bi] += int64(float64(bars[i].Count) * (float64(rng_A) / float64(rng)))
+			if bi < len(buckets)-1 {
+				bi++
 			}
-			counts[id] += bars[i].Count
+			counts[bi] += int64(float64(bars[i].Count) * (float64(rng_B) / float64(rng)))
 			i++
 		} else if bi < len(buckets)-1 {
+			// Bar is after this bucket
 			bi++
+		} else {
+			counts[bi] += bars[i].Count
+			i++
 		}
 	}
 
