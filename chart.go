@@ -35,6 +35,8 @@ type chart struct {
 	graphDataTxTime *ringBuffer[time.Time]
 	lcRx            *linechart.LineChart
 	lcTx            *linechart.LineChart
+	showTx          bool
+	showRx          bool
 	txtTimer        *text.Text
 	graphNumPoints  int64
 }
@@ -52,6 +54,8 @@ func newChart(showRx, showTx bool, burstWindow time.Duration) (*chart, error) {
 
 	c := &chart{
 		t:              t,
+		showTx:         showTx,
+		showRx:         showRx,
 		graphNumPoints: numPoints,
 	}
 
@@ -158,20 +162,23 @@ func (c *chart) run() {
 		case <-ctx.Done():
 			return
 		case <-time.After(REDRAW_INTERVAL):
-			y, x := c.getRxData()
-			if err := c.lcRx.Series("rx", y,
-				linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
-				linechart.SeriesXLabels(timeToMapForSeriesXLabels(x)),
-			); err != nil {
-				panic(err)
+			if c.showRx {
+				y, x := c.getRxData()
+				if err := c.lcRx.Series("rx", y,
+					linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
+					linechart.SeriesXLabels(timeToMapForSeriesXLabels(x)),
+				); err != nil {
+					panic(err)
+				}
 			}
-
-			y, x = c.getTxData()
-			if err := c.lcTx.Series("tx", y,
-				linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
-				linechart.SeriesXLabels(timeToMapForSeriesXLabels(x)),
-			); err != nil {
-				panic(err)
+			if c.showTx {
+				y, x := c.getTxData()
+				if err := c.lcTx.Series("tx", y,
+					linechart.SeriesCellOpts(cell.FgColor(cell.ColorGreen)),
+					linechart.SeriesXLabels(timeToMapForSeriesXLabels(x)),
+				); err != nil {
+					panic(err)
+				}
 			}
 
 			c.txtTimer.Reset()
