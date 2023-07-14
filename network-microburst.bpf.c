@@ -132,6 +132,12 @@ int calc_metrics(struct bpf_perf_event_data *ctx)
 
     curr_rx_bytes = get_rx_metrics();
     curr_tx_bytes = get_tx_metrics();
+    // We rely on the time for rate calcuation. It is possible that the
+    // timer is triggered but scheduling/execution of this function is
+    // delayed, so it is possbile that the next execution might happen
+    // "sooner", so the time can be < period we asked for. This can lead to
+    // jitter in the calculated rate. We can improve this by using dedicated
+    // cpu, higher priority etc.
     curr_ts = bpf_ktime_get_boot_ns();
 
     value = bpf_map_lookup_elem(&txrx_last, &key);

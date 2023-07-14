@@ -42,6 +42,8 @@ var (
 	wg                sync.WaitGroup
 	chrt              *chart
 	timerHist         *hdrhistogram.Histogram
+	timerToUse        string
+	perfTimerCpu      int
 )
 
 type rxTxStats struct {
@@ -58,7 +60,7 @@ const bpfName = "network-microburst.bpf.o"
 func init() {
 	flag.BoolVar(&debug, "debug", false, "enable debug logs")
 	flag.StringVar(&filterInterface, "filter-interface", "", "network interface to track, by default all interfaces are tracked")
-	flag.DurationVar(&burstWindow, "burst-window", 10*time.Millisecond, "microburst window to track, the metrics are tracked by this granularity")
+	flag.DurationVar(&burstWindow, "burst-window", 1*time.Millisecond, "microburst window to track, the metrics are tracked by this granularity")
 	flag.BoolVar(&showGraph, "show-graph", true, "plot the rate in the TUI graph. If this is set to false, the values are printed to stdout")
 	flag.Uint64Var(&rxThreshold, "print-rx-threshold", 0, "rx threshold for printing, only values greater than this are printed. used when show-graph=false")
 	flag.Uint64Var(&txThreshold, "print-tx-threshold", 0, "tx threshold for printing, only values greater than this are printed. used when show-graph=false")
@@ -66,9 +68,12 @@ func init() {
 	flag.StringVar(&saveGraphHtmlPath, "save-graph-html", "", "save the plot to the given HTML file for offline analysis")
 	flag.BoolVar(&trackRx, "track-rx", true, "track network receives")
 	flag.BoolVar(&trackTx, "track-tx", true, "track network transfers")
+	flag.StringVar(&timerToUse, "timer", "perf", "timer to use for tracking microbursts. can be either perf or go")
+	flag.IntVar(&perfTimerCpu, "perf-cpu", -1, "cpu to use for perf timer. used only when timer=perf")
 }
 
 var btime uint64 = 0
+var numCpus int = -1
 
 func main() {
 	flag.Parse()
@@ -79,6 +84,16 @@ func main() {
 		panic(err)
 	}
 	btime = stats.BootTime
+
+	// We will calculate num cpus from /proc/cpuinfo, as we may be
+	// running under taskset to run on a subset of cpus and
+	// runtime.NumCPU() will not show all the physical cpus, which we
+	// require in bpf code
+	cpus, err := fs.CPUInfo()
+	if err != nil {
+		panic(err)
+	}
+	numCpus = len(cpus)
 
 	statsInit()
 
@@ -123,7 +138,7 @@ func main() {
 		}
 	}
 
-	err = module.InitGlobalVariable("nr_cpus", uint32(runtime.NumCPU()))
+	err = module.InitGlobalVariable("nr_cpus", uint32(numCpus))
 	if err != nil {
 		panic(err)
 	}
@@ -162,33 +177,12 @@ func main() {
 		}
 	}
 
-	perfFd, err := setupPerfTimer(module)
-	if err != nil {
-		panic(err)
-	}
-	defer func() {
-		if err := syscall.Close(perfFd); err != nil {
-			panic(err)
-		}
-	}()
-
 	if debug {
 		go helpers.TracePipeListen()
 	}
 
-	eventsChannel := make(chan []byte)
-	rb, err := module.InitRingBuf("events", eventsChannel)
-	if err != nil {
-		panic(err)
-	}
-	defer func() {
-		rb.Close()
-	}()
-
-	rb.Poll(300)
-
 	if showGraph {
-		chrt, err = newChart(trackRx, trackTx)
+		chrt, err = newChart(trackRx, trackTx, burstWindow)
 		if err != nil {
 			panic(err)
 		}
@@ -199,6 +193,185 @@ func main() {
 			chrt.run()
 		}()
 	}
+
+	if timerToUse == "perf" {
+		perfFd, rb, err := setupPerfTimer(module)
+		if err != nil {
+			panic(err)
+		}
+		defer func() {
+			if err := syscall.Close(perfFd); err != nil {
+				panic(err)
+			}
+			rb.Close()
+		}()
+	} else if timerToUse == "go" {
+		err := setupGoTimer(module)
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		panic(fmt.Sprintf("invalid timer option %q", timerToUse))
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		handleStats()
+	}()
+
+	<-ctx.Done()
+
+	fmt.Printf("\nwaiting for workers to finish...\n")
+
+	wg.Wait()
+
+	if chrt != nil {
+		chrt.stop()
+	}
+
+	fmt.Println("")
+
+	statsFinish()
+
+	if !showGraph {
+		fmt.Printf("Timer accuracy: \n")
+		fmt.Printf("Mean: %v StdDev: %v Min: %v Max: %v\n", time.Duration(timerHist.Mean()), time.Duration(int64(timerHist.StdDev())), time.Duration(timerHist.Min()), time.Duration(timerHist.Max()))
+		fmt.Printf("Histogram:\n")
+		fmt.Println(getHistogram(timerHist, func(v float64) string { return time.Duration(int64(v)).String() }))
+	}
+}
+
+func handleStats() {
+	timerHist = hdrhistogram.New(1, int64(10_000_000_000), 5)
+
+	var lastTime time.Time
+
+	for {
+		var s rxTxStats
+
+		select {
+		case <-ctx.Done():
+			return
+		case s = <-statsChan:
+		}
+
+		if trackRx {
+			statsHandleRxData(s.time, s.rxBytes)
+		}
+
+		if trackTx {
+			statsHandleTxData(s.time, s.txBytes)
+		}
+
+		timerAccuracy := s.time.Sub(lastTime)
+		lastTime = s.time
+		timerHist.RecordValue(int64(timerAccuracy))
+
+		if showGraph {
+			if trackTx {
+				chrt.updateTxData(s.txBytes, s.time)
+			}
+			if trackRx {
+				chrt.updateRxData(s.rxBytes, s.time)
+			}
+		} else {
+			var rx, tx string
+			var print bool
+			if trackRx && s.rxBytes > rxThreshold {
+				rx = humanize.Bytes(s.rxBytes)
+				print = true
+			} else {
+				rx = "-"
+			}
+			if trackTx && s.txBytes > txThreshold {
+				tx = humanize.Bytes(s.txBytes)
+				print = true
+			} else {
+				tx = "-"
+			}
+
+			if print {
+				fmt.Printf("%s [%10v]: rx: %-10s tx: %-10s\n", s.time.Format("15:04:05.000"), timerAccuracy, rx, tx)
+			}
+		}
+	}
+}
+
+func getRxTxValues(txrxInfo *bpf.BPFMap) (uint64, uint64, error) {
+	var received, transferred uint64
+
+	if trackRx {
+		key := 0
+		values := make([]byte, 8*numCpus)
+		err := txrxInfo.GetValueReadInto(unsafe.Pointer(&key), &values)
+		if err != nil {
+			return 0, 0, err
+		}
+		last := 0
+		for i := 0; i < numCpus; i++ {
+			cnt := binary.LittleEndian.Uint64(values[last : last+8])
+			last += 8
+			received += cnt
+		}
+	}
+
+	if trackTx {
+		key := 1
+		values := make([]byte, 8*numCpus)
+		err := txrxInfo.GetValueReadInto(unsafe.Pointer(&key), &values)
+		if err != nil {
+			return 0, 0, err
+		}
+
+		last := 0
+		for i := 0; i < numCpus; i++ {
+			cnt := binary.LittleEndian.Uint64(values[last : last+8])
+			last += 8
+			transferred += uint64(cnt)
+		}
+	}
+
+	return received, transferred, nil
+}
+
+func setupPerfTimer(module *libbpfgo.Module) (int, *libbpfgo.RingBuffer, error) {
+	prog, err := module.GetProgram("calc_metrics")
+	if err != nil {
+		return -1, nil, fmt.Errorf("error getting program for calc_metrics: %w", err)
+	}
+
+	cpuChosen := chooseCpuForPerfTimer()
+	fd, err := unix.PerfEventOpen(&unix.PerfEventAttr{
+		Type:   unix.PERF_TYPE_SOFTWARE,
+		Config: unix.PERF_COUNT_SW_CPU_CLOCK,
+		Size:   uint32(unsafe.Sizeof(unix.PerfEventAttr{})),
+		// We will use periodic sampling, we will not use the frequency
+		Sample: uint64(burstWindow.Nanoseconds()),
+		// Sample: uint64(1_000_0),
+		// Bits:   unix.PerfBitDisabled | unix.PerfBitFreq,
+	}, -1, cpuChosen, -1, 0)
+	if err != nil {
+		return -1, nil, fmt.Errorf("open perf event: %w", err)
+	}
+
+	_, err = prog.AttachPerfEvent(fd)
+	if err != nil {
+		_ = syscall.Close(fd)
+		return -1, nil, fmt.Errorf("failed to attach program (%s): %v", prog.Name(), err)
+	}
+
+	if debug {
+		log.Printf("setup perf timer on cpu %d with %s periodic sampling", cpuChosen, burstWindow)
+	}
+
+	eventsChannel := make(chan []byte)
+	rb, err := module.InitRingBuf("events", eventsChannel)
+	if err != nil {
+		return -1, nil, fmt.Errorf("init ringbuf: %w", err)
+	}
+
+	rb.Poll(300)
 
 	wg.Add(1)
 	go func() {
@@ -229,224 +402,77 @@ func main() {
 		}
 	}()
 
+	return fd, rb, nil
+}
+
+func setupGoTimer(module *libbpfgo.Module) error {
+	txrxInfo, err := module.GetMap("txrx_info")
+	if err != nil {
+		return err
+	}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		handleStats()
+
+		var lastRx, lastTx uint64
+
+		for {
+			// TODO: we rely on the go timer for calculating
+			// rate, so our burst rate calculation is going to
+			// be only as good as its granularity/accuracy. The
+			// right thing to do is to compute this in the bpf
+			// code itself (using bpf_timer etc) and then
+			// publish that over perf event channel.
+			//
+			time.Sleep(burstWindow)
+
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			n := time.Now()
+
+			currRx, currTx, err := getRxTxValues(txrxInfo)
+			if err != nil {
+				panic(err)
+			}
+
+			var actRx, actTx uint64
+
+			if trackRx {
+				// TODO: handle wraparound
+				actRx = currRx - lastRx
+				lastRx = currRx
+			}
+
+			if trackTx {
+				actTx = currTx - lastTx
+				lastTx = currTx
+			}
+
+			select {
+			case statsChan <- rxTxStats{
+				rxBytes: actRx,
+				txBytes: actTx,
+				time:    n,
+			}:
+			default:
+				// log.Printf("dropping stats update")
+			}
+		}
 	}()
 
-	// txrxInfo, err := module.GetMap("txrx_info")
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	// wg.Add(1)
-	// go func() {
-	// 	defer wg.Done()
-
-	// 	var lastRx, lastTx uint64
-
-	// 	for {
-	// 		// TODO: we rely on the go timer for calculating
-	// 		// rate, so our burst rate calculation is going to
-	// 		// be only as good as its granularity/accuracy. The
-	// 		// right thing to do is to compute this in the bpf
-	// 		// code itself (using bpf_timer etc) and then
-	// 		// publish that over perf event channel.
-	// 		//
-	// 		time.Sleep(burstWindow)
-
-	// 		select {
-	// 		case <-ctx.Done():
-	// 			return
-	// 		default:
-	// 		}
-
-	// 		n := time.Now()
-
-	// 		currRx, currTx, err := getRxTxValues(txrxInfo)
-	// 		if err != nil {
-	// 			panic(err)
-	// 		}
-
-	// 		var actRx, actTx uint64
-
-	// 		if trackRx {
-	// 			// TODO: handle wraparound
-	// 			actRx = currRx - lastRx
-	// 			lastRx = currRx
-	// 		}
-
-	// 		if trackTx {
-	// 			actTx = currTx - lastTx
-	// 			lastTx = currTx
-	// 		}
-
-	// 		select {
-	// 		case statsChan <- rxTxStats{
-	// 			rxBytes: actRx,
-	// 			txBytes: actTx,
-	// 			time:    n,
-	// 		}:
-	// 		default:
-	// 			// log.Printf("dropping stats update")
-	// 		}
-	// 	}
-	// }()
-
-	<-ctx.Done()
-
-	fmt.Printf("\nwaiting for workers to finish...\n")
-
-	wg.Wait()
-
-	if chrt != nil {
-		chrt.stop()
-	}
-
-	fmt.Println("")
-
-	statsFinish()
-
-	if debug {
-		fmt.Printf("Timer accuracy: \n")
-		fmt.Printf("Mean: %v StdDev: %v Min: %v Max: %v\n", time.Duration(timerHist.Mean()), time.Duration(int64(timerHist.StdDev())), time.Duration(timerHist.Min()), time.Duration(timerHist.Max()))
-		fmt.Printf("Histogram:\n")
-		fmt.Println(getHistogram(timerHist, func(v float64) string { return time.Duration(int64(v)).String() }))
-	}
-}
-
-func handleStats() {
-	if debug {
-		timerHist = hdrhistogram.New(1, int64(10_000_000_000), 5)
-	}
-
-	var lastTime time.Time
-
-	for {
-		var s rxTxStats
-
-		select {
-		case <-ctx.Done():
-			return
-		case s = <-statsChan:
-		}
-
-		if trackRx {
-			statsHandleRxData(s.time, s.rxBytes)
-		}
-
-		if trackTx {
-			statsHandleTxData(s.time, s.txBytes)
-		}
-
-		if showGraph {
-			if trackTx {
-				chrt.updateTxData(s.txBytes, s.time)
-			}
-			if trackRx {
-				chrt.updateRxData(s.rxBytes, s.time)
-			}
-		} else {
-			var rx, tx string
-			var print bool
-			if trackRx && s.rxBytes > rxThreshold {
-				rx = humanize.Bytes(s.rxBytes)
-				print = true
-			} else {
-				rx = "-"
-			}
-			if trackTx && s.txBytes > txThreshold {
-				tx = humanize.Bytes(s.txBytes)
-				print = true
-			} else {
-				tx = "-"
-			}
-
-			timerAccuracy := s.time.Sub(lastTime)
-			if print {
-				fmt.Printf("%s [%10v]: rx: %-10s tx: %-10s\n", s.time.Format("15:04:05.000"), timerAccuracy, rx, tx)
-			}
-			lastTime = s.time
-
-			if debug {
-				timerHist.RecordValue(int64(timerAccuracy))
-			}
-		}
-	}
-}
-
-func getRxTxValues(txrxInfo *bpf.BPFMap) (uint64, uint64, error) {
-	var received, transferred uint64
-
-	if trackRx {
-		key := 0
-		values := make([]byte, 8*runtime.NumCPU())
-		err := txrxInfo.GetValueReadInto(unsafe.Pointer(&key), &values)
-		if err != nil {
-			return 0, 0, err
-		}
-		last := 0
-		for i := 0; i < runtime.NumCPU(); i++ {
-			cnt := binary.LittleEndian.Uint64(values[last : last+8])
-			last += 8
-			received += cnt
-		}
-	}
-
-	if trackTx {
-		key := 1
-		values := make([]byte, 8*runtime.NumCPU())
-		err := txrxInfo.GetValueReadInto(unsafe.Pointer(&key), &values)
-		if err != nil {
-			return 0, 0, err
-		}
-
-		last := 0
-		for i := 0; i < runtime.NumCPU(); i++ {
-			cnt := binary.LittleEndian.Uint64(values[last : last+8])
-			last += 8
-			transferred += uint64(cnt)
-		}
-	}
-
-	return received, transferred, nil
-}
-
-func setupPerfTimer(module *libbpfgo.Module) (int, error) {
-	prog, err := module.GetProgram("calc_metrics")
-	if err != nil {
-		return -1, fmt.Errorf("error getting program for calc_metrics: %w", err)
-	}
-
-	cpuChosen := chooseCpuForPerfTimer()
-	fd, err := unix.PerfEventOpen(&unix.PerfEventAttr{
-		Type:   unix.PERF_TYPE_SOFTWARE,
-		Config: unix.PERF_COUNT_SW_CPU_CLOCK,
-		Size:   uint32(unsafe.Sizeof(unix.PerfEventAttr{})),
-		// We will use periodic sampling, we will not use the frequency
-		Sample: uint64(burstWindow.Nanoseconds()),
-		// Sample: uint64(1_000_0),
-		// Bits:   unix.PerfBitDisabled | unix.PerfBitFreq,
-	}, -1, cpuChosen, -1, 0)
-	if err != nil {
-		return -1, fmt.Errorf("open perf event: %w", err)
-	}
-
-	_, err = prog.AttachPerfEvent(fd)
-	if err != nil {
-		_ = syscall.Close(fd)
-		return -1, fmt.Errorf("failed to attach program (%s): %v", prog.Name(), err)
-	}
-
-	if debug {
-		log.Printf("setup perf timer on cpu %d with %s periodic sampling", cpuChosen, burstWindow)
-	}
-
-	return fd, nil
+	return nil
 }
 
 func chooseCpuForPerfTimer() int {
+	if perfTimerCpu != -1 {
+		return perfTimerCpu
+	}
+
 	// We should choose a CPU that's not having too many irqs assigned
 	// to it.  Since cpu 0 is usually the busiest, we'll probably choose
 	// something from the end

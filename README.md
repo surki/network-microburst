@@ -79,6 +79,127 @@ Alternatively, to compile from source, there are two options:
    This will produce two static binaries under `release` directory: `network-microburst-arm64` and `network-microburst-x86_64`
 
 
+## Timer accuracy
+
+We use timer to caluate the rate, so granularity of the burst window and
+accuracy of the rate entirely depends on the timer accuracy. There are two
+timers available to use:
+
+1. Perf timer (default)
+
+   This uses *PERF_COUNT_SW_CPU_CLOCK*. This allows the burst window to be
+   as low as 10µs. Generally has better accuracy as well.
+
+   This timer can be enabled (this is the default though) by using
+   `network-microburst --timer=perf ...` option.
+
+2. Go timer
+
+   This uses Go's *time.Sleep()*, so accuracy of this is as good as the
+   timer being provided by Go runtime.
+
+   This timer can be enabled by using `network-microburst --timer=go ...`
+   option. This likely needs to be run with chrt to be reliable, example:
+   `chrt --rr 99 network-microburst --timer=go ..`
+
+To improve the timer reliability (especially when granularity is very low,
+like 10us etc), it is recommended to provide dedicated cpus:
+
+1. Isolate certain CPUs for timer/work
+
+   We can isolate certain CPUs (by using `isolcpus` kernel boot parameter,
+   for example `isolcpus=6-11` to isolate cpus 6 to 11) and then ask this
+   tool to use that cpu for the work (see next point). Verify that the cpus
+   isolated by checking kernel commandline `/proc/cmdline` and
+   `/sys/devices/system/cpu/isolated`.
+
+   Note that you can use `lstopo` tool to find the cpu core(s) to
+   isolate. Remember to isolate entire core(s), including the hyperthreads
+   in it.
+
+2. Configure this to tool use the reserved CPUs
+
+   Depending on the timer being used, the options vary.
+
+   `perf` timer:  `sudo network-microburst --timer=perf --perf-cpu=8 ...` runs the perf timer on cpu 8
+
+   `go` timer:  `sudo taskset -c 6-11 chrt --rr 99  network-microburst --timer=go ...` runs the tool on cpu cores 6-11 (assuming they are isolated) with high priority
+
+Checking for timer accuracy:
+
+Run with `--show-graph=false` flag, it will track timer accuracy metrics and display at the end:
+
+<details>
+<summary>Example run with perf timer:</summary>
+
+```
+# Even though we ask for 1us, perf timer granularity seems to be 10us
+
+$ sudo chrt --rr 99 ./network-microburst --burst-window 1us --show-graph=false --timer=perf
+...
+...
+
+Timer accuracy:
+Mean: 10µs StdDev: 195ns Min: 1.906µs Max: 20.161µs
+Histogram:
+        1.906µs [         1]    |
+        2.818µs [         4]    |
+         3.73µs [         2]    |
+        4.642µs [         4]    |
+        5.554µs [        32]    |
+        6.466µs [        31]    |
+        7.378µs [        39]    |
+         8.29µs [       178]    |
+        9.202µs [      8266]    |
+       10.114µs [    838038]    |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+       11.026µs [     34504]    |■■
+       11.938µs [       594]    |
+        12.85µs [       122]    |
+       13.762µs [        13]    |
+       14.674µs [        88]    |
+       15.586µs [         6]    |
+       16.498µs [         2]    |
+        17.41µs [         5]    |
+       18.322µs [         1]    |
+       20.161µs [         3]    |
+```
+</details>
+
+<details>
+<summary>Example run with go timer:</summary>
+
+```
+$ sudo chrt --rr 99 ./network-microburst --burst-window 1us --show-graph=false --timer=go
+...
+...
+
+Timer accuracy:
+Mean: 23.863µs StdDev: 127.556µs Min: 2.871µs Max: 1.130983ms
+Histogram:
+        2.871µs [         1]    |
+       59.276µs [    300378]    |■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+      115.681µs [        57]    |
+      172.086µs [        26]    |
+      228.491µs [        37]    |
+      284.896µs [        38]    |
+      341.301µs [        28]    |
+      397.706µs [        34]    |
+      454.111µs [        40]    |
+      510.516µs [        43]    |
+      566.921µs [        46]    |
+      623.326µs [        54]    |
+      679.731µs [        59]    |
+      736.136µs [        54]    |
+      792.541µs [        87]    |
+      848.946µs [       103]    |
+      905.351µs [       217]    |
+      961.756µs [       569]    |
+     1.018161ms [      2394]    |
+     1.074566ms [      1645]    |
+     1.130983ms [        81]    |
+```
+</details>
+
 ## Usage
 
 > **_NOTE:_** To simulate network microbursts, we can use iperf3:

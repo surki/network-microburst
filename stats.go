@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/HdrHistogram/hdrhistogram-go"
+	"github.com/dustin/go-humanize"
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/components"
 	"github.com/go-echarts/go-echarts/v2/opts"
@@ -43,11 +44,15 @@ func statsInit() {
 
 func statsFinish() {
 	if printHistogram {
-		fmt.Println("Received (in KiB)")
-		fmt.Println(getHistogram(rxHist, nil))
+		fmt.Println("Received:")
+		fmt.Printf("Mean: %v   StdDev: %v   Min: %v   Max: %v\n", humanize.Bytes(uint64(rxHist.Mean())), humanize.Bytes(uint64(rxHist.StdDev())), humanize.Bytes(uint64(rxHist.Min())), humanize.Bytes(uint64(rxHist.Max())))
+		fmt.Printf("Histogram:\n")
+		fmt.Println(getHistogram(rxHist, func(v float64) string { return humanize.Bytes(uint64(v)) }))
 
-		fmt.Println("Transferred (in KiB)")
-		fmt.Println(getHistogram(txHist, nil))
+		fmt.Println("Transferred:")
+		fmt.Printf("Mean: %v   StdDev: %v   Min: %v   Max: %v\n", humanize.Bytes(uint64(txHist.Mean())), humanize.Bytes(uint64(txHist.StdDev())), humanize.Bytes(uint64(txHist.Min())), humanize.Bytes(uint64(txHist.Max())))
+		fmt.Printf("Histogram:\n")
+		fmt.Println(getHistogram(txHist, func(v float64) string { return humanize.Bytes(uint64(v)) }))
 	}
 
 	if saveGraphHtmlPath != "" {
@@ -57,22 +62,22 @@ func statsFinish() {
 
 func statsHandleRxData(t time.Time, rxbytes uint64) {
 	if rxHist != nil {
-		rxHist.RecordValue(int64(rxbytes / 1024))
+		rxHist.RecordValue(int64(rxbytes))
 	}
 
 	if rxData != nil {
-		rxData.Value = statData{t, rxbytes / 1024}
+		rxData.Value = statData{t, rxbytes}
 		rxData = rxData.Next()
 	}
 }
 
 func statsHandleTxData(t time.Time, txbytes uint64) {
 	if txHist != nil {
-		txHist.RecordValue(int64(txbytes / 1024))
+		txHist.RecordValue(int64(txbytes))
 	}
 
 	if txData != nil {
-		txData.Value = statData{t, txbytes / 1024}
+		txData.Value = statData{t, txbytes}
 		txData = txData.Next()
 	}
 }
