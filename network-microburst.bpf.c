@@ -26,6 +26,11 @@ union name_buf {
 
 const volatile u8 filter_dev = 0;
 const volatile union name_buf ifname;
+const volatile __u32 nr_cpus = 0;
+
+static __u64 get_rx_metrics();
+static __u64 get_tx_metrics();
+
 /*
     checks if device name matches the filter
     params:
@@ -91,81 +96,112 @@ int BPF_PROG(trace_network_transmit, struct sk_buff *skb)
     return 0;
 }
 
-// TODO: Usse bpf_timer to do the rate calculation
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 256 * 1024);
+} events SEC(".maps");
 
-/*
-struct bpf_timer {
-        __u64 :64;
-        __u64 :64;
-} __attribute__((aligned(8)));
+struct xfer_metric {
+    __u64 ts;
+    __u64 rx_bytes;
+    __u64 tx_bytes;
+} xfer_metric;
 
+struct txrx_last_info {
+    __u64 rx_bytes;
+    __u64 tx_bytes;
+    __u64 ts;
+} txrx_last_info;
 
-struct timer_map_elem {
-    struct bpf_timer t;
-};
-
-// Timer map
-struct timer {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 8);
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
     __type(key, __u32);
-    __type(value, struct timer_map_elem);
-} timer_map SEC(".maps");
+    __type(value, struct txrx_last_info);
+} txrx_last SEC(".maps");
 
-static void dump();
-
-static int timer_cb()
+SEC("perf_event")
+int calc_metrics(struct bpf_perf_event_data *ctx)
 {
-    bpf_printk("Hello from timer callback!");
-    if (false) {
-        dump();
+    __u32 key = 0;
+    struct xfer_metric *event;
+    struct txrx_last_info *value;
+    __u64 curr_rx_bytes;
+    __u64 curr_tx_bytes;
+    __u64 curr_ts;
+
+    curr_rx_bytes = get_rx_metrics();
+    curr_tx_bytes = get_tx_metrics();
+    // We rely on the time for rate calcuation. It is possible that the
+    // timer is triggered but scheduling/execution of this function is
+    // delayed, so it is possbile that the next execution might happen
+    // "sooner", so the time can be < period we asked for. This can lead to
+    // jitter in the calculated rate. We can improve this by using dedicated
+    // cpu, higher priority etc.
+    curr_ts = bpf_ktime_get_boot_ns();
+
+    value = bpf_map_lookup_elem(&txrx_last, &key);
+    if (value) {
+        if (value->ts != 0) {
+            event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+            if (!event)
+                return 1;
+            
+            if (curr_rx_bytes > 0) {
+                event->rx_bytes = curr_rx_bytes - value->rx_bytes;
+            } else {
+                event->rx_bytes = 0;
+            }
+            if (curr_tx_bytes > 0) {
+                event->tx_bytes = curr_tx_bytes - value->tx_bytes;
+            } else {
+                event->tx_bytes = 0;
+            }
+            event->ts = curr_ts;
+
+            bpf_ringbuf_submit(event, 0);
+        }
+
+        value->rx_bytes = curr_rx_bytes;
+        value->tx_bytes = curr_tx_bytes;
+        value->ts = curr_ts;
+
+        return 0;
     }
+
     return 0;
 }
 
-
-#define CLOCK_MONOTONIC 1
-
-SEC("xdp")
-static void init_timer(void)
-{
-    bpf_printk("hello from init timer");
-    int key = 0;
-    struct timer_map_elem init = { };
-    bpf_map_update_elem(&timer_map, &key, &init, 0);
-    struct timer_map_elem *te = bpf_map_lookup_elem(&timer_map, &key);
-    if (te) {
-        struct bpf_timer *timer = &te->t;
-        bpf_timer_init(timer, &timer_map, CLOCK_MONOTONIC);
-        bpf_timer_set_callback(timer, timer_cb);
-        bpf_timer_start(timer, 1000, 0);
-    }
-}
-
-struct callback_ctx {
-        int output;
-};
-
-static __u64
-check_percpu_elem(struct bpf_map *map, __u32 *key, __u64 *val,
-                  struct callback_ctx *data)
-{
-    bpf_printk("@@@@ %d=%d", *key, *val);
-    return 0;
-}
-
-static void dump() {
+static __u64 get_rx_metrics() {
+    __u64 bytes = 0;
     int i = 0;
-    for (i=0; i<8; i++) {
+    // TODO: maybe we should have per cpu perf timer event, and send those
+    // per cpu metrics to userspace and sum them over there? this way we can
+    // avoid the cross CPU access here
+    for (i=0; i<nr_cpus; i++) {
         __u32 key = 0;
         u64 *val = bpf_map_lookup_percpu_elem(&txrx_info, &key, i);
         if (val != NULL)  {
-            bpf_printk("@@@@ %d=%d", i, *val);
+            bytes += *val;
         }
     }
-    // bpf_for_each_map_elem(&txrx_info, check_percpu_elem, (void *)0, 0);
+
+    return bytes;
 
 }
-*/
+
+static __u64 get_tx_metrics() {
+    __u64 bytes = 0;
+    int i = 0;
+    for (i=0; i<nr_cpus; i++) {
+        __u32 key = 1;
+        u64 *val = bpf_map_lookup_percpu_elem(&txrx_info, &key, i);
+        if (val != NULL)  {
+            bytes += *val;
+        }
+    }
+
+    return bytes;
+}
 
 char LICENSE[] SEC("license") = "GPL";

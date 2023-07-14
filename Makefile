@@ -9,7 +9,8 @@ LIBELF_LDFLAGS := $(shell pkg-config --static --libs libelf)
 CGO_CFLAGS := "-I$(abspath ./build/libbpf)"
 CGO_LDFLAGS := "$(abspath ./build/libbpf/libbpf.a)"
 
-network-microburst: network-microburst.bpf.o build/libbpf/libbpf.a *.go
+.PHONY: network-microburst
+network-microburst: network-microburst.bpf.o build/libbpf/libbpf.a
 	@CC=$(CC) \
 	CGO_CFLAGS="$(CGO_CFLAGS)" \
 	CGO_LDFLAGS="$(CGO_LDFLAGS)" \

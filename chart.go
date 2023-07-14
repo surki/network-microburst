@@ -17,7 +17,10 @@ import (
 	"github.com/mum4k/termdash/widgets/text"
 )
 
-const TUI_GRAPH_MAX_POINTS = 20000
+// How many seconds of data to show in the graph (post which old data will
+// scroll out)
+const TUI_GRAPH_DISPLAY_SECONDS = 10 // TODO: Make this configurable.
+const TUI_GRAPH_MAX_POINTS = 100_000
 const REDRAW_INTERVAL = 250 * time.Millisecond
 
 type chart struct {
@@ -34,18 +37,26 @@ type chart struct {
 	lcTx            *linechart.LineChart
 	showTx          bool
 	showRx          bool
+	txtTimer        *text.Text
+	graphNumPoints  int64
 }
 
-func newChart(showRx, showTx bool) (*chart, error) {
+func newChart(showRx, showTx bool, burstWindow time.Duration) (*chart, error) {
 	t, err := tcell.New()
 	if err != nil {
 		return nil, err
 	}
 
+	numPoints := int64((TUI_GRAPH_DISPLAY_SECONDS * time.Second) / burstWindow)
+	if numPoints > TUI_GRAPH_MAX_POINTS {
+		numPoints = TUI_GRAPH_MAX_POINTS
+	}
+
 	c := &chart{
-		t:      t,
-		showTx: showTx,
-		showRx: showRx,
+		t:              t,
+		showTx:         showTx,
+		showRx:         showRx,
+		graphNumPoints: numPoints,
 	}
 
 	builder := grid.New()
@@ -65,7 +76,7 @@ func newChart(showRx, showTx bool) (*chart, error) {
 
 		builder.Add(
 			grid.RowHeightPerc(
-				50,
+				46,
 				grid.ColWidthPerc(99,
 					grid.Widget(lcRx,
 						container.Border(linestyle.Light),
@@ -91,17 +102,9 @@ func newChart(showRx, showTx bool) (*chart, error) {
 			return nil, err
 		}
 
-		txLegend, err := text.New(text.RollContent(), text.WrapAtWords())
-		if err != nil {
-			return nil, err
-		}
-		if err := txLegend.Write("tx"); err != nil {
-			return nil, err
-		}
-
 		builder.Add(
 			grid.RowHeightPerc(
-				50,
+				47,
 				grid.ColWidthPerc(99,
 					grid.Widget(lcTx,
 						container.Border(linestyle.Light),
@@ -112,6 +115,22 @@ func newChart(showRx, showTx bool) (*chart, error) {
 		c.graphDataTx = newRingBuffer[float64](TUI_GRAPH_MAX_POINTS)
 		c.graphDataTxTime = newRingBuffer[time.Time](TUI_GRAPH_MAX_POINTS)
 	}
+
+	txtTimer, err := text.New()
+	if err != nil {
+		return nil, err
+	}
+
+	builder.Add(
+		grid.RowHeightPerc(
+			7,
+			grid.ColWidthPerc(99,
+				grid.Widget(txtTimer,
+					container.Border(linestyle.Light),
+					container.BorderTitle(" Timer Accuracy "),
+					container.BorderTitleAlignCenter())),
+		))
+	c.txtTimer = txtTimer
 
 	gridOpts, err := builder.Build()
 	if err != nil {
@@ -161,6 +180,9 @@ func (c *chart) run() {
 					panic(err)
 				}
 			}
+
+			c.txtTimer.Reset()
+			c.txtTimer.Write(fmt.Sprintf("Mean: %-12v StdDev: %-12v Min: %-12v Max: %-12v\n", time.Duration(timerHist.Mean()), time.Duration(int64(timerHist.StdDev())), time.Duration(timerHist.Min()), time.Duration(timerHist.Max())))
 
 			if err := c.controller.Redraw(); err != nil {
 				panic(err)
