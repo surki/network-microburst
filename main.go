@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/pprof"
 	"sync"
 	"syscall"
 	"time"
@@ -44,6 +45,8 @@ var (
 	timerHist         *hdrhistogram.Histogram
 	timerToUse        string
 	perfTimerCpu      int
+	cpuProfile        string
+	memProfile        string
 )
 
 type rxTxStats struct {
@@ -70,6 +73,9 @@ func init() {
 	flag.BoolVar(&trackTx, "track-tx", true, "track network transfers")
 	flag.StringVar(&timerToUse, "timer", "perf", "timer to use for tracking microbursts. can be either perf or go")
 	flag.IntVar(&perfTimerCpu, "perf-cpu", -1, "cpu to use for perf timer. used only when timer=perf")
+	flag.StringVar(&cpuProfile, "cpuprofile", "", "write cpu profile to `file`")
+	flag.StringVar(&memProfile, "memprofile", "", "write memory profile to `file`")
+
 }
 
 var btime uint64 = 0
@@ -77,6 +83,18 @@ var numCpus int = -1
 
 func main() {
 	flag.Parse()
+
+	if cpuProfile != "" {
+		f, err := os.Create(cpuProfile)
+		if err != nil {
+			log.Fatal("could not create CPU profile: ", err)
+		}
+		defer f.Close() // error handling omitted for example
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal("could not start CPU profile: ", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
 
 	fs, err := procfs.NewFS("/proc")
 	stats, err := fs.Stat()
@@ -239,6 +257,18 @@ func main() {
 		fmt.Printf("Mean: %v StdDev: %v Min: %v Max: %v\n", time.Duration(timerHist.Mean()), time.Duration(int64(timerHist.StdDev())), time.Duration(timerHist.Min()), time.Duration(timerHist.Max()))
 		fmt.Printf("Histogram:\n")
 		fmt.Println(getHistogram(timerHist, func(v float64) string { return time.Duration(int64(v)).String() }))
+	}
+
+	if memProfile != "" {
+		f, err := os.Create(memProfile)
+		if err != nil {
+			log.Fatal("could not create memory profile: ", err)
+		}
+		defer f.Close()
+		runtime.GC()
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			log.Fatal("could not write memory profile: ", err)
+		}
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -255,7 +256,7 @@ func getHistogramBuckets(hdrhist *hdrhistogram.Histogram) []Bucket {
 	// TODO: Figure out a better way to map hdrhistogram Bars into our
 	// buckets here.
 	bi := 0
-	for i := 0; i < len(bars)-1; {
+	for i := 0; i <= len(bars)-1; {
 		if bars[i].From <= buckets[bi] && bars[i].To <= buckets[bi] {
 			// Entire bar is in this bucket
 			counts[bi] += bars[i].Count
@@ -266,11 +267,11 @@ func getHistogramBuckets(hdrhist *hdrhistogram.Histogram) []Bucket {
 			rng := bars[i].To - bars[i].From
 			rng_A := buckets[bi] - bars[i].From
 			rng_B := bars[i].To - buckets[bi]
-			counts[bi] += int64(float64(bars[i].Count) * (float64(rng_A) / float64(rng)))
+			counts[bi] += int64(math.Round(float64(bars[i].Count) * (float64(rng_A) / float64(rng))))
 			if bi < len(buckets)-1 {
 				bi++
 			}
-			counts[bi] += int64(float64(bars[i].Count) * (float64(rng_B) / float64(rng)))
+			counts[bi] += int64(math.Floor(float64(bars[i].Count) * (float64(rng_B) / float64(rng))))
 			i++
 		} else if bi < len(buckets)-1 {
 			// Bar is after this bucket
