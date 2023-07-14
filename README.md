@@ -4,6 +4,12 @@ A utility to measure/track network microbursts.
 
 This utility measures the microbursts efficiently using eBPF (i.e., no packet captures) using given aggregation window and displays them either realtime in TUI graph and/or HTML graphs for offline analysis:
 
+How this works:
+
+- Traces network receives/transmits using eBPF and stores the count in per cpu array
+- Using a periodic timer (either perf timer or userspace timer, configurable), calcuates the rates
+- A userspace component to receive and display live graph
+
 Console output with chart:
 
 ```
