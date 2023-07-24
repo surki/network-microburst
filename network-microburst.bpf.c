@@ -12,8 +12,8 @@
 
 static void *(*bpf_map_lookup_percpu_elem)(void *map, const void *key, u32 cpu);
 
+// A dummy stand-in replacement function for older kernels
 void* __bpf_map_lookup_percpu_elem(void *map, const void *key, u32 cpu) {
-    // Do Nothing
     return NULL;
 }
 
