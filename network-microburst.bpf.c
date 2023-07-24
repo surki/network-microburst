@@ -181,8 +181,10 @@ int calc_metrics(struct bpf_perf_event_data *ctx)
 }
 
 static __u64 get_rx_metrics() {
+
     __u64 bytes = 0;
     int i = 0;
+    
     if (LINUX_VERSION_CODE > KERNEL_VERSION(5,19,0)) {
         bpf_printk("Kernel version doesnt support perf timer.");
         bpf_map_lookup_percpu_elem = &__bpf_map_lookup_percpu_elem;
