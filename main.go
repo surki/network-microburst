@@ -57,6 +57,7 @@ type rxTxStats struct {
 
 //go:embed network-microburst.bpf.o
 var bpfBin []byte
+var goTimerOnly bool
 
 const bpfName = "network-microburst.bpf.o"
 
@@ -75,7 +76,10 @@ func init() {
 	flag.IntVar(&perfTimerCpu, "perf-cpu", -1, "cpu to use for perf timer. used only when timer=perf")
 	flag.StringVar(&cpuProfile, "cpuprofile", "", "write cpu profile to `file`")
 	flag.StringVar(&memProfile, "memprofile", "", "write memory profile to `file`")
-
+	osInfo, _ := helpers.GetOSInfo()
+	if age, _ := osInfo.CompareOSBaseKernelRelease("5.19.0"); helpers.KernelVersionNewer == age {
+		goTimerOnly = true
+	}
 }
 
 var btime uint64 = 0
@@ -211,7 +215,9 @@ func main() {
 			chrt.run()
 		}()
 	}
-
+	if goTimerOnly {
+		timerToUse = "go"
+	}
 	if timerToUse == "perf" {
 		perfFd, rb, err := setupPerfTimer(module)
 		if err != nil {

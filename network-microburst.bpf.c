@@ -4,10 +4,18 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
+#include <linux/version.h>
 
 #ifndef IFNAMSIZ
 #define IFNAMSIZ 16
 #endif
+
+static void *(*bpf_map_lookup_percpu_elem)(void *map, const void *key, u32 cpu);
+
+void* __bpf_map_lookup_percpu_elem(void *map, const void *key, u32 cpu) {
+    // Do Nothing
+    return NULL;
+}
 
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
@@ -175,6 +183,11 @@ int calc_metrics(struct bpf_perf_event_data *ctx)
 static __u64 get_rx_metrics() {
     __u64 bytes = 0;
     int i = 0;
+    if (LINUX_VERSION_CODE > KERNEL_VERSION(5,19,0)) {
+        bpf_printk("Kernel version doesnt support perf timer.");
+        bpf_map_lookup_percpu_elem = &__bpf_map_lookup_percpu_elem;
+        return bytes;
+    }   
     // TODO: maybe we should have per cpu perf timer event, and send those
     // per cpu metrics to userspace and sum them over there? this way we can
     // avoid the cross CPU access here
@@ -191,7 +204,15 @@ static __u64 get_rx_metrics() {
 }
 
 static __u64 get_tx_metrics() {
+     
     __u64 bytes = 0;
+
+    if (LINUX_VERSION_CODE > KERNEL_VERSION(5,19,0)) {
+        bpf_printk("Kernel version doesnt support perf timer.");
+        bpf_map_lookup_percpu_elem = &__bpf_map_lookup_percpu_elem;
+        return bytes;
+    }
+
     int i = 0;
     for (i=0; i<nr_cpus; i++) {
         __u32 key = 1;
