@@ -186,7 +186,7 @@ static __u64 get_rx_metrics() {
     int i = 0;
     
     if (LINUX_VERSION_CODE > KERNEL_VERSION(5,19,0)) {
-        bpf_printk("Kernel version doesnt support perf timer.");
+        // unsupported fn in older kernels
         bpf_map_lookup_percpu_elem = &__bpf_map_lookup_percpu_elem;
         return bytes;
     }   
@@ -210,7 +210,7 @@ static __u64 get_tx_metrics() {
     __u64 bytes = 0;
 
     if (LINUX_VERSION_CODE > KERNEL_VERSION(5,19,0)) {
-        bpf_printk("Kernel version doesnt support perf timer.");
+        // unsupported fn in older kernels
         bpf_map_lookup_percpu_elem = &__bpf_map_lookup_percpu_elem;
         return bytes;
     }
