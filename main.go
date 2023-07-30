@@ -88,7 +88,7 @@ func init() {
 	bpfName = defaultBpfName
 	if age, _ := osInfo.CompareOSBaseKernelRelease("5.19.0"); helpers.KernelVersionNewer == age {
 		fmt.Printf("warning: perf timer not supported, use kernel version older than 5.19.0. falling back to go timer.\n")
-		goTimerOnly = true
+		timerToUse = "go"
 		bpfBin = userspaceTimerBpfBin
 		bpfName = userspaceTimerBpfName
 	}
@@ -225,9 +225,6 @@ func main() {
 			defer wg.Done()
 			chrt.run()
 		}()
-	}
-	if goTimerOnly {
-		timerToUse = "go"
 	}
 	if timerToUse == "perf" {
 		perfFd, rb, err := setupPerfTimer(module)
