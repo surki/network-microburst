@@ -21,7 +21,7 @@ network-microburst.bpf.o: network-microburst.bpf.c build/libbpf/libbpf.a
 	$(CLANG) -mcpu=v3 -g -O2 -Wall -Werror -D__TARGET_ARCH_$(ARCH) -I$(PWD)/build/libbpf $(CFLAGS) -I./include/$(ARCH) -c -target bpf $< -o $@
 
 network-microburst.bpf.per_cpu_legacy.o: network-microburst.bpf.c build/libbpf/libbpf.a
-	$(CLANG) -mcpu=v3 -g -O2 -Wall -Werror -D__USER_SPACE_PERCPU_COMPUTE_ONLY -D__TARGET_ARCH_$(ARCH) -I$(PWD)/build/libbpf $(CFLAGS) -I./include/$(ARCH) -c -target bpf $< -o $@
+	$(CLANG) -mcpu=v3 -g -O2 -Wall -Werror -D__USER_SPACE_ONLY_PERCPU_COMPUTE -D__TARGET_ARCH_$(ARCH) -I$(PWD)/build/libbpf $(CFLAGS) -I./include/$(ARCH) -c -target bpf $< -o $@
 
 
 libbpf: build/libbpf/libbpf.a

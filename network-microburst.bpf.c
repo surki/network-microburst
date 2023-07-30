@@ -175,7 +175,7 @@ int calc_metrics(struct bpf_perf_event_data *ctx)
 static __u64 get_rx_metrics() {
 
     __u64 bytes = 0;
-    #ifndef __USER_SPACE_PERCPU_COMPUTE_ONLY
+    #ifndef __USER_SPACE_ONLY_PERCPU_COMPUTE
     int i = 0;
     // TODO: maybe we should have per cpu perf timer event, and send those
     // per cpu metrics to userspace and sum them over there? this way we can
@@ -196,7 +196,7 @@ static __u64 get_rx_metrics() {
 static __u64 get_tx_metrics() {
     __u64 bytes = 0;
     
-    #ifndef __USER_SPACE_PERCPU_COMPUTE_ONLY
+    #ifndef __USER_SPACE_ONLY_PERCPU_COMPUTE
     int i = 0;
     for (i=0; i<nr_cpus; i++) {
         __u32 key = 1;
