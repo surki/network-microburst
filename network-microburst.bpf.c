@@ -10,13 +10,6 @@
 #define IFNAMSIZ 16
 #endif
 
-static void *(*bpf_map_lookup_percpu_elem)(void *map, const void *key, u32 cpu);
-
-// A dummy stand-in replacement function for older kernels
-void* __bpf_map_lookup_percpu_elem(void *map, const void *key, u32 cpu) {
-    return NULL;
-}
-
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
     __uint(max_entries, 2);
@@ -183,13 +176,8 @@ int calc_metrics(struct bpf_perf_event_data *ctx)
 static __u64 get_rx_metrics() {
 
     __u64 bytes = 0;
+    #ifndef __USER_SPACE_PERCPU_COMPUTE_ONLY
     int i = 0;
-    
-    if (LINUX_VERSION_CODE > KERNEL_VERSION(5,19,0)) {
-        // unsupported fn in kernels older than 5.19
-        bpf_map_lookup_percpu_elem = &__bpf_map_lookup_percpu_elem;
-        return bytes;
-    }   
     // TODO: maybe we should have per cpu perf timer event, and send those
     // per cpu metrics to userspace and sum them over there? this way we can
     // avoid the cross CPU access here
@@ -200,21 +188,16 @@ static __u64 get_rx_metrics() {
             bytes += *val;
         }
     }
+    #endif
 
     return bytes;
 
 }
 
 static __u64 get_tx_metrics() {
-     
     __u64 bytes = 0;
-
-    if (LINUX_VERSION_CODE > KERNEL_VERSION(5,19,0)) {
-        // unsupported fn in kernels older than 5.19
-        bpf_map_lookup_percpu_elem = &__bpf_map_lookup_percpu_elem;
-        return bytes;
-    }
-
+    
+    #ifndef __USER_SPACE_PERCPU_COMPUTE_ONLY
     int i = 0;
     for (i=0; i<nr_cpus; i++) {
         __u32 key = 1;
@@ -223,6 +206,7 @@ static __u64 get_tx_metrics() {
             bytes += *val;
         }
     }
+    #endif
 
     return bytes;
 }

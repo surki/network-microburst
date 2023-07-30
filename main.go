@@ -55,11 +55,18 @@ type rxTxStats struct {
 	time    time.Time
 }
 
-//go:embed network-microburst.bpf.o
 var bpfBin []byte
-var goTimerOnly bool
 
-const bpfName = "network-microburst.bpf.o"
+//go:embed network-microburst.bpf.o
+var defaultBpfBin []byte
+
+//go:embed network-microburst.bpf.per_cpu_legacy.o
+var userspaceTimerBpfBin []byte
+var goTimerOnly bool
+var bpfName string
+
+const defaultBpfName = "network-microburst.bpf.o"
+const userspaceTimerBpfName = "network-microburst.bpf.per_cpu_legacy.o"
 
 func init() {
 	flag.BoolVar(&debug, "debug", false, "enable debug logs")
@@ -77,9 +84,13 @@ func init() {
 	flag.StringVar(&cpuProfile, "cpuprofile", "", "write cpu profile to `file`")
 	flag.StringVar(&memProfile, "memprofile", "", "write memory profile to `file`")
 	osInfo, _ := helpers.GetOSInfo()
+	bpfBin = defaultBpfBin
+	bpfName = defaultBpfName
 	if age, _ := osInfo.CompareOSBaseKernelRelease("5.19.0"); helpers.KernelVersionNewer == age {
-		log.Printf("warning: perf timer not supported, use kernel version older than 5.19.0. falling back to go timer.\n")
+		fmt.Printf("warning: perf timer not supported, use kernel version older than 5.19.0. falling back to go timer.\n")
 		goTimerOnly = true
+		bpfBin = userspaceTimerBpfBin
+		bpfName = userspaceTimerBpfName
 	}
 }
 
@@ -140,7 +151,6 @@ func main() {
 			}
 		},
 	})
-
 	module, err := bpf.NewModuleFromBuffer(bpfBin, bpfName)
 	if err != nil {
 		panic(err)
