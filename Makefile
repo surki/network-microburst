@@ -10,7 +10,7 @@ CGO_CFLAGS := "-I$(abspath ./build/libbpf)"
 CGO_LDFLAGS := "$(abspath ./build/libbpf/libbpf.a)"
 
 .PHONY: network-microburst
-network-microburst: network-microburst.bpf.o build/libbpf/libbpf.a
+network-microburst: network-microburst.bpf.o network-microburst.bpf.per_cpu_legacy.o build/libbpf/libbpf.a
 	@CC=$(CC) \
 	CGO_CFLAGS="$(CGO_CFLAGS)" \
 	CGO_LDFLAGS="$(CGO_LDFLAGS)" \
@@ -19,6 +19,10 @@ network-microburst: network-microburst.bpf.o build/libbpf/libbpf.a
 
 network-microburst.bpf.o: network-microburst.bpf.c build/libbpf/libbpf.a
 	$(CLANG) -mcpu=v3 -g -O2 -Wall -Werror -D__TARGET_ARCH_$(ARCH) -I$(PWD)/build/libbpf $(CFLAGS) -I./include/$(ARCH) -c -target bpf $< -o $@
+
+network-microburst.bpf.per_cpu_legacy.o: network-microburst.bpf.c build/libbpf/libbpf.a
+	$(CLANG) -mcpu=v3 -g -O2 -Wall -Werror -D__USER_SPACE_ONLY_PERCPU_COMPUTE -D__TARGET_ARCH_$(ARCH) -I$(PWD)/build/libbpf $(CFLAGS) -I./include/$(ARCH) -c -target bpf $< -o $@
+
 
 libbpf: build/libbpf/libbpf.a
 
